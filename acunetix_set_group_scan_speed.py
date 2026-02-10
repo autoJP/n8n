@@ -73,8 +73,8 @@ def acu_set_target_scan_speed(
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base-url", "--acu-base-url", dest="base_url", default=os.environ.get("ACU_BASE_URL"))
-    ap.add_argument("--token", "--acu-api-token", dest="token", default=os.environ.get("ACU_API_TOKEN"))
+    ap.add_argument("--base-url", "--acu-base-url", dest="base_url", default=os.environ.get("ACUNETIX_BASE_URL"))
+    ap.add_argument("--token", "--acu-api-token", dest="token", default=os.environ.get("ACUNETIX_API_TOKEN"))
     group = ap.add_mutually_exclusive_group(required=True)
     group.add_argument("--group-id", dest="group_id")
     group.add_argument("--group-name", dest="group_name")

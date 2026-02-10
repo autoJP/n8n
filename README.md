@@ -1,87 +1,71 @@
 # autoJP/n8n
 
-Набор воспроизводимых n8n workflow (JSON) + Python CLI-утилит для пайплайна:
-subdomains → targets → nmap → Acunetix.
+Набор n8n workflow + Python CLI для пайплайна PT: `WF_A -> WF_B -> WF_C -> WF_D`,
+с healthcheck (`WF_E`) и мастер-оркестратором (`WF_Master_Orchestrator`).
 
-## Состав репозитория
+## Что исправлено
+- Убраны захардкоженные секреты/URL/IP из workflow exports: только `$env.*` и credentials.
+- Убран хардкод `product_type_id`: PT передаётся только через вход workflow.
+- Приведены переменные к единому стандарту: `DOJO_*`, `ACUNETIX_*`.
+- `WF_E` проверяет Dojo только с авторизацией (401/403 отдельно от network timeout).
+- Добавлена идемпотентность:
+  - `WF_C` (`acunetix_sync_pt.py`) делает upsert и возвращает `skipped/no_changes`.
+  - `WF_D` (`acunetix_scan_pt.py`) не запускает новый скан, если уже есть активный.
+- Master переведён в watcher/state-machine (`master_orchestrator.py` + `WF_Master_Orchestrator`).
 
-### Workflows (n8n exports)
-- `WF_A_Subdomains_PT.json` — получение/нормализация сабдоменов для Product Type.
-- `WF_C_Targets_For_PT.json` — сбор/дедупликация targets для дальнейшего сканирования.
-- `WF_B_Nmap_Product.json` — обработка Nmap-результатов и подготовка данных для сканеров.
+## Workflows
+- `WF_A_Subdomains_PT.json`
+- `WF_B_Nmap_Product.json`
+- `WF_C_Targets_For_PT.json`
+- `WF_D_Scan_For_PT.json`
+- `WF_E_HealthCheck.json`
+- `WF_Master_Orchestrator.json`
 
-### Python утилиты
-- `enum_subs_auto.py` — enumeration сабдоменов (assetfinder/sublist3r), JSON-результат.
-- `process_nmap_ips_for_pt.py` — разбор Nmap XML, создание IP:port products и обновление description PT в DefectDojo.
-- `acunetix_sync_pt.py` — синхронизация targets из DefectDojo PT в Acunetix group.
-- `acunetix_set_group_scan_speed.py` — установка `scan_speed` для targets в Acunetix group.
+## Обязательные env/credentials
+См. `.env.example`.
 
-## Порядок запуска (базовый)
-1. Импортировать workflows: `WF_A` → `WF_C` → `WF_B`.
-2. Настроить credentials/ENV в n8n (см. `.env.example`).
-3. Запустить `WF_A` (сабдомены), затем `WF_C` (targets), затем `WF_B` (Nmap processing).
-4. При необходимости синхронизировать в Acunetix через Python-скрипты.
+Обязательно:
+- `DOJO_BASE_URL`
+- `DOJO_API_TOKEN`
+- `ACUNETIX_BASE_URL`
+- `ACUNETIX_API_TOKEN`
+- `ACUNETIX_SCAN_PROFILE_ID`
 
-## Переменные окружения
-См. `.env.example` — только шаблоны, без секретов.
+## Единый контракт результата
+Все ключевые шаги возвращают:
+- `ok`
+- `stage`
+- `product_type_id`
+- `status` (`success|skipped|error|already_running|timeout`)
+- `metrics`
+- `errors[]`
+- `warnings[]`
+- `timestamps`
 
-## Унифицированный интерфейс Python CLI (P0)
-Общее:
-- JSON в `stdout`.
-- `--output <file>` — опциональная запись того же JSON в файл.
-- `--timeout` — таймаут сети/источников.
-- Предсказуемые exit codes: `0` (ok), `1` (runtime/API), `2` (invalid args/input).
+## Где хранится state
+State хранится в `description` соответствующего `Product Type` в DefectDojo, строкой:
 
-### 1) enum_subs_auto.py
-```bash
-python3 enum_subs_auto.py --domain example.com --timeout 120 --output /tmp/subs.json
-```
+`autojp_state:{...json...}`
 
-### 2) process_nmap_ips_for_pt.py
-```bash
-python3 process_nmap_ips_for_pt.py \
-  --base-url "$DOJO_BASE_URL" \
-  --token "$DOJO_API_TOKEN" \
-  --product-type-id 123 \
-  --input /tmp \
-  --timeout 30 \
-  --output /tmp/nmap_result.json
-```
+Ключи state:
+- `WF_A`, `WF_C`, `WF_D` — результат последнего шага (`success|error`)
+- `last_run`
+- `last_error`
+- `retry_count`
+- `failed_step`
 
-### 3) acunetix_sync_pt.py
-```bash
-python3 acunetix_sync_pt.py \
-  --base-url "$DOJO_BASE_URL" \
-  --token "$DOJO_API_TOKEN" \
-  --product-type-id 123 \
-  --acu-base-url "$ACU_BASE_URL" \
-  --acu-token "$ACU_API_TOKEN" \
-  --timeout 30 \
-  --output /tmp/acu_sync.json
-```
+## Проверка идемпотентности
+1. Запустить `WF_C` дважды для одного PT с неизменными данными.
+   - Второй запуск: `status=skipped`, причина `no_changes`.
+2. Запустить `WF_D` дважды для одного PT.
+   - Если первый скан активен: второй запуск `status=already_running`.
+3. Запустить `WF_Master_Orchestrator` дважды.
+   - Второй запуск не должен повторно выполнять уже успешные шаги без изменения состояния.
 
-### 4) acunetix_set_group_scan_speed.py
-```bash
-python3 acunetix_set_group_scan_speed.py \
-  --base-url "$ACU_BASE_URL" \
-  --token "$ACU_API_TOKEN" \
-  --group-id <group_uuid> \
-  --scan-speed sequential \
-  --timeout 30 \
-  --output /tmp/scan_speed.json
-```
-
-## Sanity checks, добавленные в P0
-- Валидация обязательных токенов/URL.
-- Проверка корректности `--timeout`.
-- Проверка входного каталога Nmap XML (`--input`) в `process_nmap_ips_for_pt.py`.
-- Защита от пустых списков целей (возврат структурированного JSON, без падения).
-
-## Что было / что стало / как проверить
-- Было: разные параметры CLI (`--api-token`, `--acu-api-token`, и т.д.), частично неунифицированный вывод.
-- Стало: единый стиль (`--base-url`, `--token`, `--input`, `--output`, `--timeout`) + JSON stdout во всех утилитах.
-- Проверка: `python3 <script> --help` и dry-run/invalid-input кейсы (см. ниже в отчёте).
-
-## TODO
-- Добавить smoke-тесты парсеров (P2).
-- Добавить `pyproject.toml` с `black`/`ruff` и CI lint/check (P1/P2).
+## Версионные зависимости
+- Endpoints Acunetix (`/api/v1/targets/add`, `/api/v1/scans`, `/api/v1/target_groups/...`) зависят от версии Acunetix.
+- Формат полей Product Type в Dojo зависит от версии Dojo API v2.
+- При несовместимости меняйте только URL/fields в:
+  - `acunetix_sync_pt.py`
+  - `acunetix_scan_pt.py`
+  - `master_orchestrator.py`

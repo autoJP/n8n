@@ -12,10 +12,31 @@ import json
 import os
 import sys
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from ipaddress import ip_address
 from typing import Dict, List, Set, Tuple
 
 import requests
+
+STAGE = "WF_B"
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def contract(product_type_id: int, status: str, ok: bool = True) -> dict:
+    ts = now_iso()
+    return {
+        "ok": ok,
+        "stage": STAGE,
+        "product_type_id": product_type_id,
+        "status": status,
+        "metrics": {},
+        "errors": [],
+        "warnings": [],
+        "timestamps": {"started_at": ts, "finished_at": ts},
+    }
 
 
 # ---------- logging ----------
@@ -32,7 +53,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--base-url",
-        default=os.environ.get("DOJO_BASE_URL", "http://localhost:8080/api/v2"),
+        default=os.environ.get("DOJO_BASE_URL"),
         help="DefectDojo API base URL",
     )
     p.add_argument(
@@ -170,9 +191,8 @@ class DojoClient:
 # ---------- core ----------
 
 def process_single_product_type(client: DojoClient, pt_id: int, xml_dir: str, exclude_ports: Set[int]) -> dict:
-    summary: Dict[str, object] = {
-        "ok": True,
-        "product_type_id": pt_id,
+    summary: Dict[str, object] = contract(pt_id, "success", ok=True)
+    summary["metrics"] = {
         "xml_dir": xml_dir,
         "exclude_ports": sorted(list(exclude_ports)),
         "dry_run": client.dry_run,
@@ -182,7 +202,7 @@ def process_single_product_type(client: DojoClient, pt_id: int, xml_dir: str, ex
 
     pt = client.get(f"/product_types/{pt_id}/")
     pt_name = pt.get("name", f"pt_{pt_id}")
-    summary["product_type_name"] = pt_name
+    summary["metrics"]["product_type_name"] = pt_name
 
     products: List[dict] = []
     limit = 100
@@ -196,7 +216,7 @@ def process_single_product_type(client: DojoClient, pt_id: int, xml_dir: str, ex
         if not data.get("next"):
             break
         offset += limit
-    summary["products_count"] = len(products)
+    summary["metrics"]["products_count"] = len(products)
 
     existing_product_names: Set[str] = set()
     domain_hosts: Set[str] = set()
@@ -237,8 +257,8 @@ def process_single_product_type(client: DojoClient, pt_id: int, xml_dir: str, ex
         except requests.HTTPError as e:
             created_products.append(f"{prod_name} (error: {e})")
 
-    summary["created_ip_products"] = created_products
-    summary["created_ip_products_count"] = len(created_products)
+    summary["metrics"]["created_ip_products"] = created_products
+    summary["metrics"]["created_ip_products_count"] = len(created_products)
 
     lines: List[str] = []
     if pt_name and not looks_like_ip(pt_name.split(":", 1)[0]):
@@ -258,11 +278,17 @@ def process_single_product_type(client: DojoClient, pt_id: int, xml_dir: str, ex
     description_text = "Acunetix targets:\n" + "\n".join(unique_lines) if unique_lines else ""
     try:
         client.patch(f"/product_types/{pt_id}/", {"description": description_text})
-        summary["updated_description"] = True
+        summary["metrics"]["updated_description"] = True
     except requests.HTTPError as e:
         summary["ok"] = False
-        summary["updated_description"] = False
-        summary["error"] = f"failed_update_description: {e}"
+        summary["status"] = "error"
+        summary["metrics"]["updated_description"] = False
+        summary["errors"].append({"code": "failed_update_description", "details": str(e)})
+
+    if len(created_products) == 0:
+        summary["status"] = "skipped"
+
+    summary["timestamps"]["finished_at"] = now_iso()
 
     return summary
 
@@ -270,17 +296,19 @@ def process_single_product_type(client: DojoClient, pt_id: int, xml_dir: str, ex
 def main() -> int:
     args = build_arg_parser().parse_args()
 
-    if not args.token:
+    if not args.base_url or not args.token:
         log("ERROR", "API token is required (--token or DOJO_API_TOKEN)")
-        print(json.dumps({"ok": False, "error": "missing_token"}, ensure_ascii=False))
+        print(json.dumps(contract(args.product_type_id, "error", ok=False) | {"errors": [{"code": "missing_required"}]}, ensure_ascii=False))
         return 2
     if args.timeout <= 0:
         log("ERROR", "--timeout must be > 0")
-        print(json.dumps({"ok": False, "error": "invalid_timeout"}, ensure_ascii=False))
+        print(json.dumps(contract(args.product_type_id, "error", ok=False) | {"errors": [{"code": "invalid_timeout"}]}, ensure_ascii=False))
         return 2
     if not os.path.isdir(args.xml_dir):
         log("ERROR", f"Input directory does not exist: {args.xml_dir}")
-        print(json.dumps({"ok": False, "error": "invalid_input_dir", "input": args.xml_dir}, ensure_ascii=False))
+        c = contract(args.product_type_id, "error", ok=False)
+        c["errors"].append({"code": "invalid_input_dir", "input": args.xml_dir})
+        print(json.dumps(c, ensure_ascii=False))
         return 2
 
     exclude_ports: Set[int] = {int(p.strip()) for p in args.exclude_ports.split(",") if p.strip().isdigit()}
@@ -294,7 +322,8 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result.get("ok") else 1
     except Exception as e:
-        err = {"ok": False, "error": str(e)}
+        err = contract(args.product_type_id, "error", ok=False)
+        err["errors"].append({"code": "unexpected_error", "details": str(e)})
         print(json.dumps(err, ensure_ascii=False))
         return 1
 
