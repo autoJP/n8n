@@ -1,0 +1,240 @@
+{
+  "name": "WF_Master_Orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        -120
+      ],
+      "id": "373a194e-199b-4701-97e5-4e4d3b9a165e"
+    },
+    {
+      "parameters": {},
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        20
+      ],
+      "id": "df6973a3-06b9-49a0-acb4-cfdbc9a61d18"
+    },
+    {
+      "parameters": {
+        "mode": "passThrough",
+        "output": "input1"
+      },
+      "name": "Merge Trigger",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        220,
+        -40
+      ],
+      "id": "de9c0e36-4e96-4f8b-97e2-de33bd16b7ca"
+    },
+    {
+      "parameters": {
+        "workflowId": "WF_E_HealthCheck",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "name": "Run HealthCheck",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        460,
+        -40
+      ],
+      "id": "10fcb060-019f-4f38-82c0-33ca2980c471"
+    },
+    {
+      "parameters": {
+        "workflowId": "WF_A_Subdomains_PT",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "name": "Run WF_A",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        700,
+        -40
+      ],
+      "id": "bcaeea84-e1d1-4745-aaba-c22b87a6725a"
+    },
+    {
+      "parameters": {
+        "workflowId": "WF_B_Nmap_Product",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "name": "Run WF_B",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        920,
+        -40
+      ],
+      "id": "41dc64c7-e65b-4c9f-b89d-362987f81635"
+    },
+    {
+      "parameters": {
+        "workflowId": "WF_C_Targets_For_PT",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "name": "Run WF_C",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1140,
+        -40
+      ],
+      "id": "f365f1de-6865-4c06-93ec-4925850b3614"
+    },
+    {
+      "parameters": {
+        "workflowId": "WF_D_AcunetixScan_PT",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "name": "Run WF_D",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1360,
+        -40
+      ],
+      "id": "b9771a49-f43e-4e79-a762-d2f8768e0fd6"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json:{status:'completed', executed:['WF_E_HealthCheck','WF_A_Subdomains_PT','WF_B_Nmap_Product','WF_C_Targets_For_PT','WF_D_AcunetixScan_PT'], at:new Date().toISOString()}}];"
+      },
+      "name": "Build Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1580,
+        -40
+      ],
+      "id": "3261741b-11f2-4ab1-8b67-296a9a571269"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Merge Trigger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Merge Trigger",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Trigger": {
+      "main": [
+        [
+          {
+            "node": "Run HealthCheck",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run HealthCheck": {
+      "main": [
+        [
+          {
+            "node": "Run WF_A",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run WF_A": {
+      "main": [
+        [
+          {
+            "node": "Run WF_B",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run WF_B": {
+      "main": [
+        [
+          {
+            "node": "Run WF_C",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run WF_C": {
+      "main": [
+        [
+          {
+            "node": "Run WF_D",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run WF_D": {
+      "main": [
+        [
+          {
+            "node": "Build Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

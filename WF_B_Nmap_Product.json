@@ -207,7 +207,7 @@
     {
       "parameters": {
         "executeOnce": false,
-        "command": "=DOJO_BASE_URL=\"http://localhost:8080/api/v2\" \\\nDOJO_TOKEN=\"8772f6e093f7a9e5eee8241b393131a5ae6e7260\" \\\npython3 /opt/tools/dojo_set_internet.py \\\n  --product-id {{$json[\"product_id\"]}} \\\n  --xml /tmp/nmap_{{$json[\"product_id\"]}}.xml\n"
+        "command": "=DOJO_BASE_URL=\"{{$env.DOJO_BASE_URL || \"http://localhost:8080/api/v2\"}}\" \\\nDOJO_TOKEN=\"{{$env.DOJO_API_TOKEN}}\" \\\npython3 /opt/tools/dojo_set_internet.py \\\n  --product-id {{$json[\"product_id\"]}} \\\n  --xml /tmp/nmap_{{$json[\"product_id\"]}}.xml\n"
       },
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,

@@ -1,5 +1,5 @@
 {
-  "name": "WF_C_Targets_For_PT",
+  "name": "WF_D_AcunetixScan_PT",
   "nodes": [
     {
       "parameters": {},
@@ -10,7 +10,7 @@
         0,
         0
       ],
-      "id": "5a9e60c0-df43-4ba1-9c77-01af999b760f"
+      "id": "10869f82-e9a3-4c95-8beb-12f67ba7978d"
     },
     {
       "parameters": {
@@ -20,6 +20,14 @@
             {
               "name": "product_type_id",
               "value": "={{ Number($json.product_type_id || $env.DEFAULT_PRODUCT_TYPE_ID || 1) }}"
+            },
+            {
+              "name": "poll_interval",
+              "value": "={{ Number($json.poll_interval || $env.ACUNETIX_POLL_INTERVAL || 30) }}"
+            },
+            {
+              "name": "timeout_seconds",
+              "value": "={{ Number($json.timeout_seconds || $env.ACUNETIX_SCAN_TIMEOUT_SECONDS || 3600) }}"
             }
           ],
           "boolean": [
@@ -35,37 +43,37 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 2,
       "position": [
-        240,
+        220,
         0
       ],
-      "id": "ed8a19f1-7d04-43b9-9660-46d11dd20662"
+      "id": "c17dc959-d7c2-497e-b5af-27eab88169fd"
     },
     {
       "parameters": {
-        "command": "=python3 ./sync_targets_for_pt.py --dojo-base-url \"{{$env.DOJO_BASE_URL}}\" --dojo-api-token \"{{$env.DOJO_API_TOKEN}}\" --product-type-id \"{{$json.product_type_id}}\" --acu-base-url \"{{$env.ACUNETIX_BASE_URL}}\" --acu-api-token \"{{$env.ACUNETIX_API_TOKEN}}\" {{$json.dry_run ? '--dry-run' : ''}}"
+        "command": "=python3 ./acunetix_scan_import_pt.py --dojo-base-url \"{{$env.DOJO_BASE_URL}}\" --dojo-api-token \"{{$env.DOJO_API_TOKEN}}\" --product-type-id \"{{$json.product_type_id}}\" --acu-base-url \"{{$env.ACUNETIX_BASE_URL}}\" --acu-api-token \"{{$env.ACUNETIX_API_TOKEN}}\" --scan-profile-id \"{{$env.ACUNETIX_SCAN_PROFILE_ID || '11111111-1111-1111-1111-111111111111'}}\" --poll-interval \"{{$json.poll_interval}}\" --timeout-seconds \"{{$json.timeout_seconds}}\" {{$json.dry_run ? '--dry-run' : ''}}"
       },
-      "name": "Run Target Sync Script",
+      "name": "Run Scan Import Script",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
       "position": [
         500,
         0
       ],
-      "id": "29b46c56-2183-4b10-abf5-a98c41b68ff7",
+      "id": "26da58b9-3d99-4df7-82db-b5b1128f0eac",
       "continueOnFail": true
     },
     {
       "parameters": {
-        "jsCode": "const src = $json.stdout || $json.stderr || '{}';\nlet parsed;\ntry { parsed = JSON.parse(src.trim() || '{}'); } catch (e) { throw new Error(`Unable to parse sync script output: ${src}`); }\nreturn [{ json: { ...parsed, commandExitCode: $json.exitCode ?? 0 } }];"
+        "jsCode": "const src = $json.stdout || $json.stderr || '{}';\nlet parsed;\ntry { parsed = JSON.parse(src.trim() || '{}'); } catch (e) { throw new Error(`Unable to parse scan output: ${src}`); }\nreturn [{ json: { ...parsed, commandExitCode: $json.exitCode ?? 0 } }];"
       },
-      "name": "Parse Sync Report",
+      "name": "Parse Scan Report",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         760,
         0
       ],
-      "id": "e3f4e0b4-a1b0-4c15-9522-69587cff04ea"
+      "id": "a1deffe6-ca4a-4a15-8e90-243ba3187975"
     },
     {
       "parameters": {
@@ -97,27 +105,27 @@
           "combinator": "and"
         }
       },
-      "name": "Check Sync Result",
+      "name": "Check Scan Result",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
         980,
         0
       ],
-      "id": "b6c78469-0c38-4cf4-b46c-0b601d14941d"
+      "id": "0598df45-1c97-4663-bad6-a6164c59dbf3"
     },
     {
       "parameters": {
         "assignments": {
           "assignments": [
             {
-              "id": "8ebd902c-f5bf-430b-bcd6-871789052ac0",
+              "id": "ba349e60-f219-4122-a6c7-1c6fce19d726",
               "name": "status",
               "value": "success",
               "type": "string"
             },
             {
-              "id": "13cb22af-eabb-4bea-8604-aa91f620f12a",
+              "id": "c8495af5-0ced-4399-9bce-f2517c9adad6",
               "name": "report",
               "value": "={{ $json }}",
               "type": "object"
@@ -126,33 +134,33 @@
         },
         "options": {}
       },
-      "name": "Return Report",
+      "name": "Return Scan Report",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        1220,
+        1240,
         -80
       ],
-      "id": "8720b822-6a1e-4bc5-b79d-ce07402b4629"
+      "id": "1f127a1c-c0cc-44c6-ab18-073d5ed149c8"
     },
     {
       "parameters": {
         "assignments": {
           "assignments": [
             {
-              "id": "4f4c8891-0042-406b-889b-ed8d34ebe350",
+              "id": "d84e1aa3-2ee1-4ebe-a166-609eda997df5",
               "name": "status",
               "value": "failure",
               "type": "string"
             },
             {
-              "id": "33bd7e09-4099-449c-b2fb-f88712dabeb7",
+              "id": "0156abe5-4f90-41d9-b1ed-c3ab05e022a2",
               "name": "error",
-              "value": "={{ $json.error || 'WF_C target sync failed' }}",
+              "value": "={{ $json.error || 'WF_D scan/import failed' }}",
               "type": "string"
             },
             {
-              "id": "b5541bbf-be39-4589-bdda-b1176c6e00c5",
+              "id": "baca08b7-b5af-4e53-a9f0-b272f0f036c1",
               "name": "report",
               "value": "={{ $json }}",
               "type": "object"
@@ -161,14 +169,14 @@
         },
         "options": {}
       },
-      "name": "Return Error",
+      "name": "Return Scan Error",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        1220,
+        1240,
         80
       ],
-      "id": "c9db0abb-9188-403d-b993-3ffe5058e227"
+      "id": "55399398-3eb9-488b-a591-1c7d8a27b00f"
     }
   ],
   "connections": {
@@ -187,47 +195,47 @@
       "main": [
         [
           {
-            "node": "Run Target Sync Script",
+            "node": "Run Scan Import Script",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Run Target Sync Script": {
+    "Run Scan Import Script": {
       "main": [
         [
           {
-            "node": "Parse Sync Report",
+            "node": "Parse Scan Report",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Parse Sync Report": {
+    "Parse Scan Report": {
       "main": [
         [
           {
-            "node": "Check Sync Result",
+            "node": "Check Scan Result",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Check Sync Result": {
+    "Check Scan Result": {
       "main": [
         [
           {
-            "node": "Return Report",
+            "node": "Return Scan Report",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Return Error",
+            "node": "Return Scan Error",
             "type": "main",
             "index": 0
           }

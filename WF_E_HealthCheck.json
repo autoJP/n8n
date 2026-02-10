@@ -1,0 +1,206 @@
+{
+  "name": "WF_E_HealthCheck",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "e8c58854-ee47-4863-b64d-2fb87bc2f2c9"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5fcdd5bf-4b4d-4c12-a172-ef170d400c19",
+              "name": "dojo_health_url",
+              "value": "={{$env.DOJO_BASE_URL + '/system_settings/'}}",
+              "type": "string"
+            },
+            {
+              "id": "3fd5f5bf-ec32-4991-97df-52810ae50414",
+              "name": "acu_health_url",
+              "value": "={{$env.ACUNETIX_BASE_URL + '/api/v1/me'}}",
+              "type": "string"
+            },
+            {
+              "id": "1e638b52-5308-40b1-a41b-abff16aa86b4",
+              "name": "n8n_health_url",
+              "value": "={{$env.N8N_HEALTHCHECK_URL || 'http://localhost:5678/healthz'}}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Set Endpoints",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ],
+      "id": "3e707f2c-5d13-4c7d-a6e9-1f222240196a"
+    },
+    {
+      "parameters": {
+        "url": "={{$json.dojo_health_url}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Token {{$env.DOJO_API_TOKEN}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "name": "Check DefectDojo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        -120
+      ],
+      "id": "a91f9650-b8fd-4dc8-b860-4b9e5453affa",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "={{$json.acu_health_url}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Auth",
+              "value": "={{$env.ACUNETIX_API_TOKEN}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "name": "Check Acunetix",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ],
+      "id": "77c2e8fc-7670-499b-95f4-407f72723ab7",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "={{$json.n8n_health_url}}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "name": "Check n8n",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        120
+      ],
+      "id": "870f4259-0887-4df1-a64b-024c2db7b33b",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const all = $input.all();\nconst dojo = all[0]?.json || {};\nconst acu = all[1]?.json || {};\nconst n8n = all[2]?.json || {};\nconst status = [\n  { system: 'defectdojo', ok: !dojo.error },\n  { system: 'acunetix', ok: !acu.error },\n  { system: 'n8n', ok: !n8n.error },\n];\nconst failed = status.filter((s) => !s.ok);\nif (failed.length > 0) {\n  throw new Error(`Health check failed for: ${failed.map((f) => f.system).join(', ')}`);\n}\nreturn [{ json: { status: 'success', checks: status, details: { dojo, acu, n8n } } }];"
+      },
+      "name": "Evaluate Responses",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        0
+      ],
+      "id": "1548fbd0-1e02-4990-8fd8-47f42235caf8"
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Endpoints",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Endpoints": {
+      "main": [
+        [
+          {
+            "node": "Check DefectDojo",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check Acunetix",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check n8n",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check DefectDojo": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Acunetix": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Responses",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Check n8n": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Responses",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}
