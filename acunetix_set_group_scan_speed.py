@@ -1,33 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-Устанавливает скорость сканирования (scan_speed) для всех целей в Target Group Acunetix.
-
-Варианты использования:
-
-1) Через group_id (предпочтительно, т.к. у нас он уже есть из acunetix_sync_pt.py):
-
-   python3 acunetix_set_group_scan_speed.py \
-     --acu-base-url https://192.168.68.103:3443 \
-     --acu-api-token <TOKEN> \
-     --group-id 46bcc7f4-8baf-4dc1-b4a3-004292b8a855 \
-     --scan-speed sequential
-
-2) Через group_name:
-
-   python3 acunetix_set_group_scan_speed.py \
-     --acu-base-url https://192.168.68.103:3443 \
-     --acu-api-token <TOKEN> \
-     --group-name testfire.net \
-     --scan-speed sequential
-
-Все параметры можно также брать из переменных окружения:
-  ACU_BASE_URL, ACU_API_TOKEN.
-"""
-
 import argparse
 import json
+import os
 import sys
 import traceback
 from typing import Any, Dict, List, Optional
@@ -38,12 +14,14 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-# --------------- helpers ---------------
-
 def make_session(verify: bool = False) -> requests.Session:
     s = requests.Session()
     s.verify = verify
     return s
+
+
+def log(level: str, message: str) -> None:
+    print(f"{level}: {message}", file=sys.stderr)
 
 
 def acu_headers(token: str) -> Dict[str, str]:
@@ -61,18 +39,10 @@ def safe_json(resp: requests.Response) -> Any:
         return {"_raw": resp.text[:500]}
 
 
-# --------------- API calls ---------------
-
-def acu_list_groups(
-    s: requests.Session,
-    base_url: str,
-    token: str,
-) -> List[Dict[str, Any]]:
-    url = f"{base_url.rstrip('/')}/api/v1/target_groups?limit=100"
-    r = s.get(url, headers=acu_headers(token), timeout=30)
+def acu_list_groups(s: requests.Session, base_url: str, token: str, timeout: int) -> List[Dict[str, Any]]:
+    r = s.get(f"{base_url.rstrip('/')}/api/v1/target_groups?limit=100", headers=acu_headers(token), timeout=timeout)
     r.raise_for_status()
-    data = r.json()
-    return data.get("groups", [])
+    return r.json().get("groups", [])
 
 
 def acu_find_group_by_name(groups: List[Dict[str, Any]], name: str) -> Optional[Dict[str, Any]]:
@@ -82,105 +52,78 @@ def acu_find_group_by_name(groups: List[Dict[str, Any]], name: str) -> Optional[
     return None
 
 
-def acu_get_group_targets(
-    s: requests.Session,
-    base_url: str,
-    token: str,
-    group_id: str,
-) -> List[str]:
-    """
-    GET /api/v1/target_groups/{group_id}/targets
-    ответ содержит поле target_id_list.
-    """
-    url = f"{base_url.rstrip('/')}/api/v1/target_groups/{group_id}/targets"
-    r = s.get(url, headers=acu_headers(token), timeout=30)
+def acu_get_group_targets(s: requests.Session, base_url: str, token: str, group_id: str, timeout: int) -> List[str]:
+    r = s.get(f"{base_url.rstrip('/')}/api/v1/target_groups/{group_id}/targets", headers=acu_headers(token), timeout=timeout)
     r.raise_for_status()
-    data = r.json()
-    return data.get("target_id_list", [])
+    return r.json().get("target_id_list", [])
 
 
-def acu_get_target_configuration(
-    s: requests.Session,
-    base_url: str,
-    token: str,
-    target_id: str,
-) -> Dict[str, Any]:
-    url = f"{base_url.rstrip('/')}/api/v1/targets/{target_id}/configuration"
-    r = s.get(url, headers=acu_headers(token), timeout=30)
+def acu_get_target_configuration(s: requests.Session, base_url: str, token: str, target_id: str, timeout: int) -> Dict[str, Any]:
+    r = s.get(f"{base_url.rstrip('/')}/api/v1/targets/{target_id}/configuration", headers=acu_headers(token), timeout=timeout)
     r.raise_for_status()
     return r.json()
 
 
 def acu_set_target_scan_speed(
-    s: requests.Session,
-    base_url: str,
-    token: str,
-    target_id: str,
-    scan_speed: str,
+    s: requests.Session, base_url: str, token: str, target_id: str, scan_speed: str, timeout: int
 ) -> requests.Response:
-    url = f"{base_url.rstrip('/')}/api/v1/targets/{target_id}/configuration"
     payload = {"scan_speed": scan_speed}
-    r = s.patch(url, headers=acu_headers(token), json=payload, timeout=30)
-    return r
+    return s.patch(f"{base_url.rstrip('/')}/api/v1/targets/{target_id}/configuration", headers=acu_headers(token), json=payload, timeout=timeout)
 
 
-# --------------- main ---------------
-
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--acu-base-url", dest="acu_base_url", required=True)
-    ap.add_argument("--acu-api-token", dest="acu_api_token", required=True)
-
+    ap.add_argument("--base-url", "--acu-base-url", dest="base_url", default=os.environ.get("ACU_BASE_URL"))
+    ap.add_argument("--token", "--acu-api-token", dest="token", default=os.environ.get("ACU_API_TOKEN"))
     group = ap.add_mutually_exclusive_group(required=True)
     group.add_argument("--group-id", dest="group_id")
     group.add_argument("--group-name", dest="group_name")
+    ap.add_argument("--scan-speed", dest="scan_speed", default="sequential")
+    ap.add_argument("--timeout", type=int, default=30)
+    ap.add_argument("--output", help="Optional path to write result JSON")
+    ap.add_argument("--dry-run", action="store_true")
+    return ap
 
-    ap.add_argument(
-        "--scan-speed",
-        dest="scan_speed",
-        default="sequential",
-        help="scan_speed значение (по умолчанию 'sequential')",
-    )
-    ap.add_argument(
-        "--dry-run",
-        dest="dry_run",
-        action="store_true",
-        help="не менять конфигурацию, только показать план",
-    )
 
-    args = ap.parse_args()
+def main() -> int:
+    args = build_parser().parse_args()
+
+    if not args.base_url or not args.token:
+        log("ERROR", "base-url/token are required")
+        print(json.dumps({"ok": False, "error": "missing_required"}, ensure_ascii=False))
+        return 2
+    if args.timeout <= 0:
+        print(json.dumps({"ok": False, "error": "invalid_timeout"}, ensure_ascii=False))
+        return 2
 
     debug: Dict[str, Any] = {
-        "acu_base_url": args.acu_base_url,
+        "base_url": args.base_url,
         "group_id_arg": args.group_id,
         "group_name_arg": args.group_name,
         "scan_speed": args.scan_speed,
         "dry_run": bool(args.dry_run),
+        "timeout": args.timeout,
     }
 
     try:
         s = make_session(verify=False)
-
-        # 1. Определяем group_id
         group_id = args.group_id
         group_info: Optional[Dict[str, Any]] = None
 
         if not group_id:
-            groups = acu_list_groups(s, args.acu_base_url, args.acu_api_token)
-            debug["groups_total"] = len(groups)
+            groups = acu_list_groups(s, args.base_url, args.token, args.timeout)
             g = acu_find_group_by_name(groups, args.group_name)
+            debug["groups_total"] = len(groups)
             if not g:
-                print(json.dumps({
-                    "ok": False,
-                    "error": "group_not_found",
-                    "details": f"Group with name '{args.group_name}' not found",
-                    "debug": debug,
-                }, ensure_ascii=False))
-                sys.exit(1)
+                result = {"ok": False, "error": "group_not_found", "details": f"Group with name '{args.group_name}' not found", "debug": debug}
+                if args.output:
+                    with open(args.output, "w", encoding="utf-8") as f:
+                        json.dump(result, f, ensure_ascii=False, indent=2)
+                print(json.dumps(result, ensure_ascii=False))
+                return 1
             group_id = g.get("group_id")
             group_info = g
         else:
-            # можем при желании подтянуть инфу о группе, но это не обязательно
             group_info = {"group_id": group_id}
 
         if not group_id:
@@ -189,45 +132,34 @@ def main() -> None:
         debug["group_id"] = group_id
         debug["group_info"] = group_info
 
-        # 2. Получаем все target_id в группе
-        target_ids = acu_get_group_targets(s, args.acu_base_url, args.acu_api_token, group_id)
+        target_ids = acu_get_group_targets(s, args.base_url, args.token, group_id, args.timeout)
         debug["targets_in_group_count"] = len(target_ids)
-        debug["targets_in_group"] = target_ids
 
         if not target_ids:
-            print(json.dumps({
-                "ok": True,
-                "warning": "no_targets_in_group",
-                "group_id": group_id,
-                "scan_speed": args.scan_speed,
-                "debug": debug,
-            }, ensure_ascii=False))
-            return
+            result = {"ok": True, "warning": "no_targets_in_group", "group_id": group_id, "scan_speed": args.scan_speed, "targets_total": 0, "debug": debug}
+            if args.output:
+                with open(args.output, "w", encoding="utf-8") as f:
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+            print(json.dumps(result, ensure_ascii=False))
+            return 0
 
         changed: List[str] = []
         skipped: List[str] = []
         errors: List[Dict[str, Any]] = []
 
-        # 3. Для каждого target — проверяем текущий scan_speed и при необходимости меняем
         for tid in target_ids:
             try:
-                cfg = acu_get_target_configuration(s, args.acu_base_url, args.acu_api_token, tid)
+                cfg = acu_get_target_configuration(s, args.base_url, args.token, tid, args.timeout)
                 current = cfg.get("scan_speed")
                 if current == args.scan_speed:
                     skipped.append(tid)
                     continue
-
                 if args.dry_run:
                     changed.append(tid)
                     continue
-
-                r = acu_set_target_scan_speed(s, args.acu_base_url, args.acu_api_token, tid, args.scan_speed)
+                r = acu_set_target_scan_speed(s, args.base_url, args.token, tid, args.scan_speed, args.timeout)
                 if r.status_code not in (200, 204):
-                    errors.append({
-                        "target_id": tid,
-                        "status": r.status_code,
-                        "response": safe_json(r),
-                    })
+                    errors.append({"target_id": tid, "status": r.status_code, "response": safe_json(r)})
                 else:
                     changed.append(tid)
             except Exception as e:
@@ -247,23 +179,22 @@ def main() -> None:
             "debug": debug,
         }
 
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
         print(json.dumps(result, ensure_ascii=False))
-
-        if errors:
-            sys.exit(1)
+        return 0 if result["ok"] else 1
 
     except Exception as e:
         debug["exception"] = str(e)
         debug["traceback"] = traceback.format_exc()
-        print(json.dumps({
-            "ok": False,
-            "error": "unexpected_error",
-            "details": str(e),
-            "debug": debug,
-        }, ensure_ascii=False))
-        sys.exit(1)
+        result = {"ok": False, "error": "unexpected_error", "details": str(e), "debug": debug}
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+        print(json.dumps(result, ensure_ascii=False))
+        return 1
 
 
 if __name__ == "__main__":
-    main()
-
+    sys.exit(main())
