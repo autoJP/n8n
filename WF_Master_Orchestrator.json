@@ -1,0 +1,18 @@
+{
+  "name": "WF_Master_Orchestrator",
+  "nodes": [
+    {"parameters": {}, "name": "Trigger", "type": "n8n-nodes-base.executeWorkflowTrigger", "typeVersion": 1, "position": [0, 0], "id": "wf-m-trigger"},
+    {"parameters": {"values": {"string": [{"name": "product_type_ids", "value": "={{ $json.product_type_ids || '' }}"}]}}, "name": "Set PT List", "type": "n8n-nodes-base.set", "typeVersion": 1, "position": [220, 0], "id": "wf-m-set"},
+    {"parameters": {"command": "=python3 /opt/tools/master_orchestrator.py --base-url {{$env.DOJO_BASE_URL}} --token {{$env.DOJO_API_TOKEN}} --product-type-ids \"{{ $json.product_type_ids }}\""}, "name": "Run State Machine", "type": "n8n-nodes-base.executeCommand", "typeVersion": 1, "position": [440, 0], "id": "wf-m-run"},
+    {"parameters": {"functionCode": "return [{json: JSON.parse($json.stdout || '{}')}];"}, "name": "Parse Result", "type": "n8n-nodes-base.function", "typeVersion": 1, "position": [660, 0], "id": "wf-m-parse"}
+  ],
+  "connections": {
+    "Trigger": {"main": [[{"node": "Set PT List", "type": "main", "index": 0}]]},
+    "Set PT List": {"main": [[{"node": "Run State Machine", "type": "main", "index": 0}]]},
+    "Run State Machine": {"main": [[{"node": "Parse Result", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"},
+  "pinData": {},
+  "tags": []
+}

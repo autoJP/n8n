@@ -4,8 +4,9 @@
 """
 enum_subs_auto.py — subdomain enum using only assetfinder and sublist3r.
 Outputs:
- - plain lines to stdout by default (one host per line)
- - --json-output -> compact JSON to stdout (useful for n8n)
+ - JSON to stdout (stable schema)
+ - optional JSON file via --output
+ - legacy plain lines via --plain-output
 Writes artifacts:
  - <out_dir>/<domain>.subs.txt
  - <out_dir>/<domain>.subs.json
@@ -23,7 +24,7 @@ import socket
 import subprocess
 import sys
 import time
-from typing import List, Set, Tuple
+from typing import List, Set, Tuple, Dict, Any
 
 DOMAIN_RE = re.compile(r"^(?=.{1,253}$)(?!-)(?:[A-Za-z0-9-]{1,63}\.)+[A-Za-z]{2,63}\.?$")
 
@@ -122,21 +123,31 @@ def write_json(path: str, obj) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
 
+
+def log(level: str, message: str) -> None:
+    print(f"{level}: {message}", file=sys.stderr)
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--domain", required=True, help="Root domain")
     p.add_argument("--sources", default="assetfinder,sublist3r",
                    help="Comma list: assetfinder,sublist3r (default both)")
-    p.add_argument("--per-source-timeout", type=int, default=120,
+    p.add_argument("--timeout", "--per-source-timeout", dest="timeout", type=int, default=120,
                    help="Timeout per external source (seconds)")
     p.add_argument("--resolve", action="store_true", help="Keep only resolvable hosts")
     p.add_argument("--out-dir", default="./out", help="Artifacts directory")
-    p.add_argument("--json-output", action="store_true", help="Print JSON to stdout")
+    p.add_argument("--output", help="Optional path to write result JSON")
+    p.add_argument("--plain-output", action="store_true", help="Legacy plain text output to stdout")
+    p.add_argument("--json-output", action="store_true", help="Deprecated; JSON is stdout by default")
     args = p.parse_args()
 
     domain = norm_domain(args.domain)
     if not is_valid_domain(domain):
-        print(f"[!] Invalid domain: {args.domain}", file=sys.stderr)
+        log("ERROR", f"Invalid domain: {args.domain}")
+        return 2
+
+    if args.timeout <= 0:
+        log("ERROR", "--timeout must be > 0")
         return 2
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -146,9 +157,9 @@ def main() -> int:
     collected = set()
 
     if "assetfinder" in sources:
-        collected |= from_assetfinder(domain, timeout=args.per_source_timeout)
+        collected |= from_assetfinder(domain, timeout=args.timeout)
     if "sublist3r" in sources:
-        collected |= from_sublist3r(domain, timeout=args.per_source_timeout)
+        collected |= from_sublist3r(domain, timeout=args.timeout)
 
     # normalize & filter
     cleaned = set()
@@ -181,13 +192,15 @@ def main() -> int:
 
     write_text(txt_path, "\n".join(subs_sorted) + ("\n" if subs_sorted else ""))
     out_obj = {
+        "ok": True,
         "domain": domain,
         "count": len(subs_sorted),
         "subs": subs_sorted if not args.resolve else [
             {"host": s, "ips": resolved_map.get(s, [])} for s in subs_sorted
         ],
         "sources": {"assetfinder": "assetfinder" in sources, "sublist3r": "sublist3r" in sources},
-        "artifacts": {"txt": os.path.abspath(txt_path), "json": os.path.abspath(json_path)}
+        "artifacts": {"txt": os.path.abspath(txt_path), "json": os.path.abspath(json_path)},
+        "timeout": args.timeout,
     }
     write_json(json_path, out_obj)
 
@@ -202,21 +215,23 @@ def main() -> int:
     except Exception:
         pass
 
+    if args.output:
+        write_json(args.output, out_obj)
+
     # stdout
-    if args.json_output:
-        print(json.dumps(out_obj, ensure_ascii=False))
-    else:
+    if args.plain_output:
         if args.resolve:
             for s in subs_sorted:
                 print(s + " " + ",".join(resolved_map.get(s, [])))
         else:
             for s in subs_sorted:
                 print(s)
+    else:
+        print(json.dumps(out_obj, ensure_ascii=False))
 
     elapsed = time.time() - start
-    print(f"[i] {domain}: found {len(subs_sorted)} subs in {elapsed:.1f}s", file=sys.stderr)
+    log("INFO", f"{domain}: found {len(subs_sorted)} subs in {elapsed:.1f}s")
     return 0
 
 if __name__ == "__main__":
     sys.exit(main())
-

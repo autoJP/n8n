@@ -1,0 +1,16 @@
+{
+  "name": "WF_E_HealthCheck",
+  "nodes": [
+    {"parameters": {}, "name": "Trigger", "type": "n8n-nodes-base.executeWorkflowTrigger", "typeVersion": 1, "position": [0, 0], "id": "wf-e-trigger"},
+    {"parameters": {"authentication": "headerAuth", "url": "={{ $env.DOJO_BASE_URL.replace(/\\/+$/,'') + '/system_settings/' }}", "options": {"response": {"fullResponse": true}}}, "name": "Dojo Authorized Check", "type": "n8n-nodes-base.httpRequest", "typeVersion": 1, "position": [220, 0], "id": "wf-e-dojo", "continueOnFail": true, "credentials": {"httpHeaderAuth": {"id": "DOJO_CREDENTIAL", "name": "Dojo Header Auth"}}},
+    {"parameters": {"functionCode": "const r = $json; const status = r.statusCode || 0; const authFailed = [401,403].includes(status); const networkFailed = status === 0 || !!r.error; return [{json:{ok:!authFailed && !networkFailed,stage:'WF_E',product_type_id:null,status:authFailed?'error':(networkFailed?'timeout':'success'),metrics:{dojo_status_code:status},errors:authFailed?[{code:'dojo_auth_failed'}]:(networkFailed?[{code:'dojo_unreachable'}]:[]),warnings:[],timestamps:{started_at:$now.toISO(),finished_at:$now.toISO()}}}];"}, "name": "Build Contract", "type": "n8n-nodes-base.function", "typeVersion": 1, "position": [440, 0], "id": "wf-e-contract"}
+  ],
+  "connections": {
+    "Trigger": {"main": [[{"node": "Dojo Authorized Check", "type": "main", "index": 0}]]},
+    "Dojo Authorized Check": {"main": [[{"node": "Build Contract", "type": "main", "index": 0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"},
+  "pinData": {},
+  "tags": []
+}
