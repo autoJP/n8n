@@ -5,7 +5,8 @@ import argparse
 import json
 import os
 import sys
-import traceback
+import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -13,188 +14,111 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+EXIT_RUNTIME=1
+EXIT_INPUT=2
+EXIT_EXTERNAL_API=3
+STAGE="WF_C.acunetix_set_group_scan_speed"
 
-def make_session(verify: bool = False) -> requests.Session:
-    s = requests.Session()
-    s.verify = verify
-    return s
+def now()->str:
+    return datetime.now(timezone.utc).isoformat()
 
+def headers(token:str)->Dict[str,str]:
+    return {"X-Auth": token, "Accept": "application/json", "Content-Type": "application/json"}
 
-def log(level: str, message: str) -> None:
-    print(f"{level}: {message}", file=sys.stderr)
+def call(method:str,s:requests.Session,url:str,timeout:int,**kwargs:Any)->requests.Response:
+    for i in range(3):
+        r=s.request(method,url,timeout=timeout,**kwargs)
+        if r.status_code in (401,403):
+            raise PermissionError(f"auth_error:{r.status_code}")
+        if r.status_code==429 and i<2:
+            time.sleep(2**i); continue
+        if r.status_code>=500 and i<2:
+            time.sleep(2**i); continue
+        return r
+    return r
 
+def base_result(group_id: str|None)->Dict[str,Any]:
+    return {"ok":True,"status":"ok","stage":STAGE,"product_type_id":None,
+            "timestamps":{"start":now(),"end":None},
+            "metrics":{"targets_total":0,"targets_updated":0,"targets_skipped":0},
+            "errors":[],"warnings":[],"group_id":group_id}
 
-def acu_headers(token: str) -> Dict[str, str]:
-    return {
-        "X-Auth": token,
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
+def done(res:Dict[str,Any], output:Optional[str]):
+    res["timestamps"]["end"]=now()
+    if output:
+        with open(output,'w',encoding='utf-8') as f: json.dump(res,f,ensure_ascii=False,indent=2)
+    print(json.dumps(res,ensure_ascii=False))
 
+def main()->int:
+    ap=argparse.ArgumentParser()
+    ap.add_argument('--base-url', default=os.environ.get('ACU_BASE_URL'))
+    ap.add_argument('--token', default=os.environ.get('ACU_API_TOKEN'))
+    g=ap.add_mutually_exclusive_group(required=True)
+    g.add_argument('--group-id')
+    g.add_argument('--group-name')
+    ap.add_argument('--scan-speed', default='sequential')
+    ap.add_argument('--product-type-id', type=int)
+    ap.add_argument('--input')
+    ap.add_argument('--output')
+    ap.add_argument('--timeout', type=int, default=30)
+    ap.add_argument('--dry-run', action='store_true')
+    args=ap.parse_args()
 
-def safe_json(resp: requests.Response) -> Any:
+    res=base_result(args.group_id)
+    res['product_type_id']=args.product_type_id
+    if not args.base_url or not args.token or args.timeout<=0:
+        res['ok']=False; res['status']='error'; res['errors'].append({'code':'invalid_input','message':'missing base-url/token or bad timeout'})
+        done(res,args.output); return EXIT_INPUT
+
+    s=requests.Session(); s.verify=False
     try:
-        return resp.json()
-    except Exception:
-        return {"_raw": resp.text[:500]}
-
-
-def acu_list_groups(s: requests.Session, base_url: str, token: str, timeout: int) -> List[Dict[str, Any]]:
-    r = s.get(f"{base_url.rstrip('/')}/api/v1/target_groups?limit=100", headers=acu_headers(token), timeout=timeout)
-    r.raise_for_status()
-    return r.json().get("groups", [])
-
-
-def acu_find_group_by_name(groups: List[Dict[str, Any]], name: str) -> Optional[Dict[str, Any]]:
-    for g in groups:
-        if g.get("name") == name:
-            return g
-    return None
-
-
-def acu_get_group_targets(s: requests.Session, base_url: str, token: str, group_id: str, timeout: int) -> List[str]:
-    r = s.get(f"{base_url.rstrip('/')}/api/v1/target_groups/{group_id}/targets", headers=acu_headers(token), timeout=timeout)
-    r.raise_for_status()
-    return r.json().get("target_id_list", [])
-
-
-def acu_get_target_configuration(s: requests.Session, base_url: str, token: str, target_id: str, timeout: int) -> Dict[str, Any]:
-    r = s.get(f"{base_url.rstrip('/')}/api/v1/targets/{target_id}/configuration", headers=acu_headers(token), timeout=timeout)
-    r.raise_for_status()
-    return r.json()
-
-
-def acu_set_target_scan_speed(
-    s: requests.Session, base_url: str, token: str, target_id: str, scan_speed: str, timeout: int
-) -> requests.Response:
-    payload = {"scan_speed": scan_speed}
-    return s.patch(f"{base_url.rstrip('/')}/api/v1/targets/{target_id}/configuration", headers=acu_headers(token), json=payload, timeout=timeout)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--base-url", "--acu-base-url", dest="base_url", default=os.environ.get("ACU_BASE_URL"))
-    ap.add_argument("--token", "--acu-api-token", dest="token", default=os.environ.get("ACU_API_TOKEN"))
-    group = ap.add_mutually_exclusive_group(required=True)
-    group.add_argument("--group-id", dest="group_id")
-    group.add_argument("--group-name", dest="group_name")
-    ap.add_argument("--scan-speed", dest="scan_speed", default="sequential")
-    ap.add_argument("--timeout", type=int, default=30)
-    ap.add_argument("--output", help="Optional path to write result JSON")
-    ap.add_argument("--dry-run", action="store_true")
-    return ap
-
-
-def main() -> int:
-    args = build_parser().parse_args()
-
-    if not args.base_url or not args.token:
-        log("ERROR", "base-url/token are required")
-        print(json.dumps({"ok": False, "error": "missing_required"}, ensure_ascii=False))
-        return 2
-    if args.timeout <= 0:
-        print(json.dumps({"ok": False, "error": "invalid_timeout"}, ensure_ascii=False))
-        return 2
-
-    debug: Dict[str, Any] = {
-        "base_url": args.base_url,
-        "group_id_arg": args.group_id,
-        "group_name_arg": args.group_name,
-        "scan_speed": args.scan_speed,
-        "dry_run": bool(args.dry_run),
-        "timeout": args.timeout,
-    }
-
-    try:
-        s = make_session(verify=False)
-        group_id = args.group_id
-        group_info: Optional[Dict[str, Any]] = None
-
+        group_id=args.group_id
         if not group_id:
-            groups = acu_list_groups(s, args.base_url, args.token, args.timeout)
-            g = acu_find_group_by_name(groups, args.group_name)
-            debug["groups_total"] = len(groups)
-            if not g:
-                result = {"ok": False, "error": "group_not_found", "details": f"Group with name '{args.group_name}' not found", "debug": debug}
-                if args.output:
-                    with open(args.output, "w", encoding="utf-8") as f:
-                        json.dump(result, f, ensure_ascii=False, indent=2)
-                print(json.dumps(result, ensure_ascii=False))
-                return 1
-            group_id = g.get("group_id")
-            group_info = g
-        else:
-            group_info = {"group_id": group_id}
+            r=call('GET',s,f"{args.base_url.rstrip('/')}/api/v1/target_groups?limit=100",headers=headers(args.token),timeout=args.timeout)
+            r.raise_for_status()
+            groups=r.json().get('groups',[])
+            match=next((x for x in groups if x.get('name')==args.group_name),None)
+            if not match:
+                res['status']='skipped'; res['warnings'].append({'code':'group_not_found','message':args.group_name}); done(res,args.output); return 0
+            group_id=match.get('group_id')
+        res['group_id']=group_id
 
-        if not group_id:
-            raise RuntimeError("group_id is empty after resolution")
+        r=call('GET',s,f"{args.base_url.rstrip('/')}/api/v1/target_groups/{group_id}/targets",headers=headers(args.token),timeout=args.timeout)
+        r.raise_for_status()
+        tids=r.json().get('target_id_list',[])
+        res['metrics']['targets_total']=len(tids)
+        if not tids:
+            res['status']='skipped'; done(res,args.output); return 0
 
-        debug["group_id"] = group_id
-        debug["group_info"] = group_info
+        for tid in tids:
+            cfg=call('GET',s,f"{args.base_url.rstrip('/')}/api/v1/targets/{tid}/configuration",headers=headers(args.token),timeout=args.timeout)
+            cfg.raise_for_status()
+            current=cfg.json().get('scan_speed')
+            if current==args.scan_speed:
+                res['metrics']['targets_skipped']+=1
+                continue
+            if args.dry_run:
+                res['metrics']['targets_updated']+=1
+                continue
+            upd=call('PATCH',s,f"{args.base_url.rstrip('/')}/api/v1/targets/{tid}/configuration",headers=headers(args.token),json={'scan_speed':args.scan_speed},timeout=args.timeout)
+            if upd.status_code not in (200,204):
+                res['errors'].append({'code':'update_failed','target_id':tid,'status':upd.status_code})
+            else:
+                res['metrics']['targets_updated']+=1
 
-        target_ids = acu_get_group_targets(s, args.base_url, args.token, group_id, args.timeout)
-        debug["targets_in_group_count"] = len(target_ids)
+        if res['errors']:
+            res['ok']=False; res['status']='error'; done(res,args.output); return EXIT_RUNTIME
+        if res['metrics']['targets_updated']==0:
+            res['status']='skipped'
+        done(res,args.output)
+        return 0
 
-        if not target_ids:
-            result = {"ok": True, "warning": "no_targets_in_group", "group_id": group_id, "scan_speed": args.scan_speed, "targets_total": 0, "debug": debug}
-            if args.output:
-                with open(args.output, "w", encoding="utf-8") as f:
-                    json.dump(result, f, ensure_ascii=False, indent=2)
-            print(json.dumps(result, ensure_ascii=False))
-            return 0
-
-        changed: List[str] = []
-        skipped: List[str] = []
-        errors: List[Dict[str, Any]] = []
-
-        for tid in target_ids:
-            try:
-                cfg = acu_get_target_configuration(s, args.base_url, args.token, tid, args.timeout)
-                current = cfg.get("scan_speed")
-                if current == args.scan_speed:
-                    skipped.append(tid)
-                    continue
-                if args.dry_run:
-                    changed.append(tid)
-                    continue
-                r = acu_set_target_scan_speed(s, args.base_url, args.token, tid, args.scan_speed, args.timeout)
-                if r.status_code not in (200, 204):
-                    errors.append({"target_id": tid, "status": r.status_code, "response": safe_json(r)})
-                else:
-                    changed.append(tid)
-            except Exception as e:
-                errors.append({"target_id": tid, "error": str(e)})
-
-        result = {
-            "ok": len(errors) == 0,
-            "group_id": group_id,
-            "scan_speed": args.scan_speed,
-            "dry_run": bool(args.dry_run),
-            "targets_total": len(target_ids),
-            "targets_changed": changed,
-            "targets_changed_count": len(changed),
-            "targets_skipped": skipped,
-            "targets_skipped_count": len(skipped),
-            "errors": errors,
-            "debug": debug,
-        }
-
-        if args.output:
-            with open(args.output, "w", encoding="utf-8") as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
-        print(json.dumps(result, ensure_ascii=False))
-        return 0 if result["ok"] else 1
-
+    except PermissionError as e:
+        res['ok']=False; res['status']='error'; res['errors'].append({'code':'auth_error','message':str(e)}); done(res,args.output); return EXIT_EXTERNAL_API
+    except requests.RequestException as e:
+        res['ok']=False; res['status']='error'; res['errors'].append({'code':'external_api','message':str(e)}); done(res,args.output); return EXIT_EXTERNAL_API
     except Exception as e:
-        debug["exception"] = str(e)
-        debug["traceback"] = traceback.format_exc()
-        result = {"ok": False, "error": "unexpected_error", "details": str(e), "debug": debug}
-        if args.output:
-            with open(args.output, "w", encoding="utf-8") as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
-        print(json.dumps(result, ensure_ascii=False))
-        return 1
+        res['ok']=False; res['status']='error'; res['errors'].append({'code':'runtime_error','message':str(e)}); done(res,args.output); return EXIT_RUNTIME
 
-
-if __name__ == "__main__":
+if __name__=='__main__':
     sys.exit(main())

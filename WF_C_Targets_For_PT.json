@@ -43,7 +43,7 @@
     },
     {
       "parameters": {
-        "command": "=python3 /opt/tools/process_nmap_ips_for_pt.py \\\n  --product-type-id {{$json[\"product_type_id\"].toString()}} \\\n  --xml-dir /tmp \\\n  --api-token 8772f6e093f7a9e5eee8241b393131a5ae6e7260"
+        "command": "=python3 /workspace/n8n/process_nmap_ips_for_pt.py \\\n  --base-url {{$env.DOJO_BASE_URL || 'http://localhost:8080/api/v2'}} \\\n  --token {{$env.DOJO_API_TOKEN}} \\\n  --product-type-id {{$json[\"product_type_id\"].toString()}} \\\n  --input {{$env.NMAP_XML_DIR || '/tmp'}} \\\n  --timeout {{$env.HTTP_TIMEOUT || 30}}"
       },
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
@@ -56,7 +56,7 @@
     },
     {
       "parameters": {
-        "command": "=python3 /opt/tools/acunetix_sync_pt.py \\\n  --dojo-base-url {{$env.DOJO_BASE_URL || 'http://localhost:8080/api/v2'}} \\\n  --dojo-api-token 8772f6e093f7a9e5eee8241b393131a5ae6e7260 \\\n  --product-type-id {{ $('Set Parameters').item.json.product_type_id }} \\\n  --acu-base-url {{ $('Set Parameters').item.json.acunetix_base_url }} \\\n  --acu-api-token {{ $('Set Parameters').item.json.acunetix_api_key }}\n "
+        "command": "=python3 /workspace/n8n/acunetix_sync_pt.py \\\n  --base-url {{$env.DOJO_BASE_URL || 'http://localhost:8080/api/v2'}} \\\n  --token {{$env.DOJO_API_TOKEN}} \\\n  --product-type-id {{ $('Set Parameters').item.json.product_type_id }} \\\n  --acu-base-url {{ $('Set Parameters').item.json.acunetix_base_url }} \\\n  --acu-token {{ $('Set Parameters').item.json.acunetix_api_key }} \\\n  --timeout {{$env.HTTP_TIMEOUT || 30}}"
       },
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
@@ -69,7 +69,7 @@
     },
     {
       "parameters": {
-        "command": "=python3 /opt/tools/acunetix_set_group_scan_speed.py \\\n  --acu-base-url {{ $('Set Parameters').item.json.acunetix_base_url }} \\\n  --acu-api-token {{ $('Set Parameters').item.json.acunetix_api_key }} \\\n  --group-id {{ $json.group_id }} \\\n  --scan-speed sequential\n"
+        "command": "=python3 /workspace/n8n/acunetix_set_group_scan_speed.py \\\n  --base-url {{ $('Set Parameters').item.json.acunetix_base_url }} \\\n  --token {{ $('Set Parameters').item.json.acunetix_api_key }} \\\n  --group-id {{ $json.group_id }} \\\n  --product-type-id {{ $('Set Parameters').item.json.product_type_id }} \\\n  --scan-speed sequential \\\n  --timeout {{$env.HTTP_TIMEOUT || 30}}"
       },
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
@@ -82,8 +82,7 @@
     },
     {
       "parameters": {
-        "language": "python",
-        "pythonCode": "import json\n\n# n8n подаёт данные в переменной `items`\nitem = items[0]  # берём первый элемент\nstdout = item.get(\"json\", {}).get(\"stdout\", \"\")\n\ntry:\n    parsed = json.loads(stdout)\nexcept Exception as e:\n    raise Exception(f\"Не удалось распарсить stdout как JSON:\\n{stdout}\\nОшибка: {e}\")\n\n# Формируем новый объект вывода\nreturn [{\n    \"json\": {\n        \"group_id\": parsed.get(\"group_id\"),\n        \"full_output\": parsed\n    }\n}]\n"
+        "jsCode": "const c = $item(0).$node['Execute Command'].json || {};\nconst s = $item(0).$node['Sync Acunetix Group'].json || {};\nconst sp = $json || {};\nreturn [{json:{\n  ok: Boolean(c.ok && s.ok && sp.ok),\n  status: [c.status,s.status,sp.status].includes('error') ? 'error' : ([c.status,s.status,sp.status].includes('skipped') ? 'skipped' : 'ok'),\n  stage: 'WF_C',\n  product_type_id: Number($item(0).$node['Set Parameters'].json.product_type_id),\n  timestamps: { start: new Date().toISOString(), end: new Date().toISOString() },\n  metrics: {\n    targets_total: Number((c.metrics||{}).targets_total || 0),\n    targets_created: Number((c.metrics||{}).targets_created || 0) + Number((s.metrics||{}).targets_created || 0),\n    targets_skipped: Number((c.metrics||{}).targets_skipped || 0) + Number((s.metrics||{}).targets_skipped || 0),\n    scans_started: 0, scans_skipped: 0, findings_imported: 0\n  },\n  errors: [...(c.errors||[]),...(s.errors||[]),...(sp.errors||[])],\n  warnings: [...(c.warnings||[]),...(s.warnings||[]),...(sp.warnings||[])],\n}}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,

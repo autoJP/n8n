@@ -1,0 +1,147 @@
+{
+  "name": "WF_Master_DojoWatcher",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        300
+      ],
+      "id": "f5e1c17c-3ccc-4018-8d0c-d5292a8b7158"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.DOJO_BASE_URL}}/product_types/?limit=1000",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Token {{$env.DOJO_API_TOKEN}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "name": "List Product Types",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        300
+      ],
+      "id": "dd55bec8-0f97-4feb-b415-4bfe0b976739"
+    },
+    {
+      "parameters": {
+        "jsCode": "const pts = $json.results || [];\nconst out=[];\nfor (const pt of pts){\n const tags = pt.tags || [];\n const stateTag = tags.find(t => t.startsWith('autojp:state='));\n let state = {current_stage:'WF_A', last_success_stage:null, last_run_at:null, last_error:null, retry_count:0};\n if (stateTag){try{state=JSON.parse(Buffer.from(stateTag.split('=',2)[1],'base64').toString('utf8'));}catch(e){}}\n out.push({json:{product_type_id:pt.id, state}});\n}\nreturn out;"
+      },
+      "name": "State Machine Decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        300
+      ],
+      "id": "c4598819-f021-4af3-abcd-936754056ba2"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "WF_C_Targets_For_PT"
+        },
+        "options": {}
+      },
+      "name": "Execute WF_C",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        930,
+        240
+      ],
+      "id": "5d4c20b7-97fe-4869-920b-d9ccbbc2c80f"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "WF_D_AcunetixScan_PT"
+        },
+        "options": {}
+      },
+      "name": "Execute WF_D",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        930,
+        360
+      ],
+      "id": "cd4edc3b-9773-4e1c-a6dd-5e7898fd3a02"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "List Product Types",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Product Types": {
+      "main": [
+        [
+          {
+            "node": "State Machine Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "State Machine Decision": {
+      "main": [
+        [
+          {
+            "node": "Execute WF_C",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Execute WF_D",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "61295bbb-592b-40d2-bb62-5303292e8e79",
+  "meta": {},
+  "id": "173d443e-ccdb-4266-90e9-bff2715b3353",
+  "tags": []
+}

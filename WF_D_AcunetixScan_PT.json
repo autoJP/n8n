@@ -1,0 +1,85 @@
+{
+  "name": "WF_D_AcunetixScan_PT",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        200,
+        300
+      ],
+      "id": "9d09a4a1-028c-4270-b9b4-99398b9e4138"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "product_type_id",
+              "value": "=1"
+            },
+            {
+              "name": "group_id",
+              "value": ""
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Set Parameters",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        420,
+        300
+      ],
+      "id": "77663514-e44a-4515-b924-dcd87e415e0e"
+    },
+    {
+      "parameters": {
+        "command": "=python3 /workspace/n8n/acunetix_scan_pt.py \\\n  --base-url {{$env.ACU_BASE_URL}} \\\n  --token {{$env.ACU_API_TOKEN}} \\\n  --group-id {{ $json.group_id }} \\\n  --product-type-id {{ $json.product_type_id }} \\\n  --timeout {{$env.HTTP_TIMEOUT || 30}}"
+      },
+      "name": "Run Scan Or Skip",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        650,
+        300
+      ],
+      "id": "05c4aaa3-e0d0-461d-b5c8-b81073c1113e"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Parameters": {
+      "main": [
+        [
+          {
+            "node": "Run Scan Or Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "3f32105e-f93b-4ec3-a88c-d7435ddc476e",
+  "meta": {},
+  "id": "a1d621ff-43a1-4074-bd6f-ca572cd754bb",
+  "tags": []
+}

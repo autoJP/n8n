@@ -1,0 +1,128 @@
+{
+  "name": "WF_E_Health",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        280
+      ],
+      "id": "68fe7631-ada6-4fda-893e-851614c4841f"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.DOJO_BASE_URL}}/product_types/?limit=1",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "name": "Dojo Health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        200
+      ],
+      "id": "fff2a546-ce0e-45f5-8de6-9672f58d150b"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.ACU_BASE_URL}}/api/v1/me",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Auth",
+              "value": "={{$env.ACU_API_TOKEN}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "name": "Acunetix Health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        360
+      ],
+      "id": "5795386f-8532-458b-98a1-fe5797ea73dd"
+    },
+    {
+      "parameters": {
+        "jsCode": "const dojo = $item(0).$node['Dojo Health'].json;\nconst acu = $item(0).$node['Acunetix Health'].json;\nreturn [{json:{ok:true,status:'ok',stage:'WF_E',product_type_id:null,timestamps:{start:new Date().toISOString(),end:new Date().toISOString()},metrics:{services_checked:2},errors:[],warnings:[]}}];"
+      },
+      "name": "Aggregate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        280
+      ],
+      "id": "4a03dc66-e100-4b8c-85f6-ed5409b3393a"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Dojo Health",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Acunetix Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dojo Health": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Acunetix Health": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "bb425b7b-18ed-4ab3-981e-1ce712c0d48a",
+  "meta": {},
+  "id": "70bfed47-ae09-4f73-9869-cb88d3d767d6",
+  "tags": []
+}
