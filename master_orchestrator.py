@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -13,7 +14,9 @@ import requests
 
 STATE_PREFIX = "autojp_state:"
 STAGES = ["WF_A", "WF_B", "WF_C", "WF_D"]
-SUCCESS_STATUSES = {"success", "skipped", "no_changes", "already_running"}
+FINAL_STAGE = STAGES[-1]
+SUCCESS_STATUSES = {"success", "skipped", "no_changes", "already_running", "skipped_recent"}
+TRANSIENT_KEYWORDS = {"timeout", "tempor", "rate", "429", "5xx", "503", "502", "504", "connection", "unavailable"}
 
 
 def now_iso() -> str:
@@ -125,6 +128,37 @@ def execute_workflow(
     return normalized, body
 
 
+def summarize_raw_response(raw: Dict[str, Any]) -> Dict[str, Any]:
+    data_len = len(raw.get("data", [])) if isinstance(raw.get("data"), list) else 0
+    return {
+        "has_data": data_len > 0,
+        "data_items": data_len,
+        "execution_id": raw.get("id") or raw.get("executionId"),
+        "status": raw.get("status"),
+    }
+
+
+def is_transient_exception(exc: Exception) -> bool:
+    transient_types = (
+        requests.Timeout,
+        requests.ConnectionError,
+        requests.exceptions.ChunkedEncodingError,
+    )
+    return isinstance(exc, transient_types)
+
+
+def is_transient_result(step_result: Dict[str, Any]) -> bool:
+    if (step_result.get("status") or "").lower() == "timeout":
+        return True
+    for err in step_result.get("errors", []):
+        text = json.dumps(err, ensure_ascii=False).lower()
+        if "401" in text or "403" in text or "invalid" in text or "validation" in text:
+            return False
+        if any(keyword in text for keyword in TRANSIENT_KEYWORDS):
+            return True
+    return False
+
+
 def next_stage(state: Dict[str, Any]) -> Optional[str]:
     current = state.get("current_stage")
     if not current:
@@ -157,6 +191,8 @@ def main() -> int:
     ap.add_argument("--wf-c-id", default=os.environ.get("N8N_WF_C_ID"))
     ap.add_argument("--wf-d-id", default=os.environ.get("N8N_WF_D_ID"))
     ap.add_argument("--timeout", type=int, default=60)
+    ap.add_argument("--max-retries", type=int, default=int(os.environ.get("MASTER_MAX_RETRIES", "2")))
+    ap.add_argument("--retry-backoff-seconds", type=float, default=float(os.environ.get("MASTER_RETRY_BACKOFF_SECONDS", "2")))
     args = ap.parse_args()
 
     stage_to_id = {
@@ -202,7 +238,40 @@ def main() -> int:
             state.setdefault("last_run_at", None)
             state.setdefault("last_error", None)
             state.setdefault("retry_count", 0)
-            state["input_hash"] = input_hash_for_pt(pt)
+            state.setdefault("pipeline_status", "idle")
+            current_input_hash = input_hash_for_pt(pt)
+            previous_success_hash = state.get("last_success_input_hash")
+
+            if (
+                previous_success_hash
+                and current_input_hash == previous_success_hash
+                and state.get("last_success_stage") == FINAL_STAGE
+                and not state.get("last_error")
+            ):
+                item["status"] = "skipped_no_change"
+                state["input_hash"] = current_input_hash
+                state["pipeline_status"] = "skipped_no_change"
+                state["last_run_at"] = now_iso()
+                patch_product_type_state(args.base_url, args.token, pt_id, state, args.timeout)
+                result["items"].append(item)
+                continue
+
+            if current_input_hash != state.get("input_hash"):
+                state["current_stage"] = None
+                state["last_success_stage"] = None
+                state["last_error"] = None
+                state["retry_count"] = 0
+
+            if state.get("last_error") and current_input_hash == state.get("input_hash") and int(state.get("retry_count", 0)) >= args.max_retries:
+                item["status"] = "failed"
+                state["pipeline_status"] = "failed"
+                state["last_run_at"] = now_iso()
+                patch_product_type_state(args.base_url, args.token, pt_id, state, args.timeout)
+                result["items"].append(item)
+                continue
+
+            state["input_hash"] = current_input_hash
+            state["pipeline_status"] = "running"
 
             # Run until pipeline completes or an error occurs.
             while True:
@@ -222,17 +291,47 @@ def main() -> int:
                     "trace_id": f"master-{pt_id}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
                     "stage": stage,
                 }
-                step_result, raw = execute_workflow(
-                    args.n8n_base_url,
-                    args.n8n_api_key,
-                    wf_id,
-                    payload,
-                    args.timeout,
-                )
+                attempt = 0
+                transient_failure = False
+                while True:
+                    raw: Dict[str, Any] = {}
+                    try:
+                        step_result, raw = execute_workflow(
+                            args.n8n_base_url,
+                            args.n8n_api_key,
+                            wf_id,
+                            payload,
+                            args.timeout,
+                        )
+                    except Exception as exc:
+                        if is_transient_exception(exc) and attempt < args.max_retries:
+                            delay = args.retry_backoff_seconds * (2**attempt)
+                            attempt += 1
+                            state["retry_count"] = attempt
+                            time.sleep(delay)
+                            continue
+                        raise
+
+                    transient_failure = is_transient_result(step_result)
+                    if not (step_result.get("ok") and step_result.get("status") in SUCCESS_STATUSES) and transient_failure and attempt < args.max_retries:
+                        delay = args.retry_backoff_seconds * (2**attempt)
+                        attempt += 1
+                        state["retry_count"] = attempt
+                        time.sleep(delay)
+                        continue
+                    break
 
                 step_status = step_result.get("status", "error")
                 step_ok = bool(step_result.get("ok")) and step_status in SUCCESS_STATUSES
-                item["steps"].append({"stage": stage, "status": step_status, "raw": raw})
+                item["steps"].append(
+                    {
+                        "stage": stage,
+                        "status": step_status,
+                        "attempts": attempt + 1,
+                        "summary": summarize_raw_response(raw),
+                        "metrics": step_result.get("metrics", {}),
+                    }
+                )
                 state["last_run_at"] = now_iso()
 
                 if step_ok:
@@ -243,6 +342,8 @@ def main() -> int:
                     if nxt is None:
                         item["status"] = "success"
                         state["current_stage"] = None
+                        state["last_success_input_hash"] = current_input_hash
+                        state["pipeline_status"] = "success"
                         break
                     state["current_stage"] = nxt
                     patch_product_type_state(args.base_url, args.token, pt_id, state, args.timeout)
@@ -253,9 +354,10 @@ def main() -> int:
                     "status": step_status,
                     "errors": step_result.get("errors", []),
                 }
-                state["retry_count"] = int(state.get("retry_count", 0)) + 1
+                state["retry_count"] = attempt + 1
                 state["current_stage"] = stage
-                item["status"] = "error"
+                state["pipeline_status"] = "failed" if (not transient_failure or state["retry_count"] >= args.max_retries) else "error"
+                item["status"] = "failed" if state["pipeline_status"] == "failed" else "error"
                 break
 
             patch_product_type_state(args.base_url, args.token, pt_id, state, args.timeout)
@@ -263,7 +365,7 @@ def main() -> int:
             item["status"] = "error"
             item["steps"].append({"stage": "WF_MASTER", "status": "error", "details": str(exc)})
 
-        if item["status"] == "error":
+        if item["status"] in {"error", "failed"}:
             result["ok"] = False
             result["metrics"]["failed"] += 1
         result["items"].append(item)

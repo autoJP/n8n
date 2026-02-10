@@ -5,7 +5,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Set
 
 import requests
@@ -27,6 +27,7 @@ def result_contract(pt_id: int, status: str, ok: bool = True) -> Dict[str, Any]:
         "ok": ok,
         "stage": STAGE,
         "product_type_id": pt_id,
+        "product_id": None,
         "status": status,
         "metrics": {},
         "errors": [],
@@ -55,6 +56,24 @@ def post_json(session: requests.Session, url: str, headers: Dict[str, str], payl
     return r.json()
 
 
+
+
+def parse_scan_time(scan: Dict[str, Any]) -> datetime | None:
+    for key in ("start_date", "end_date", "created_at", "creation_date"):
+        raw = (scan.get("current_session", {}) or {}).get(key) or scan.get(key)
+        if not raw:
+            continue
+        if isinstance(raw, (int, float)):
+            return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+        if isinstance(raw, str):
+            normalized = raw.replace("Z", "+00:00")
+            try:
+                dt = datetime.fromisoformat(normalized)
+                return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            except Exception:
+                continue
+    return None
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser()
     p.add_argument("--base-url", dest="dojo_base_url", default=os.environ.get("DOJO_BASE_URL"))
@@ -66,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--incremental", action="store_true")
     p.add_argument("--timeout", type=int, default=30)
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--recent-window-minutes", type=int, default=int(os.environ.get("ACUNETIX_RECENT_SCAN_WINDOW_MINUTES", "60")))
     return p
 
 
@@ -127,6 +147,26 @@ def main() -> int:
             out["status"] = "already_running"
             out["warnings"].append("scan_guard_triggered")
             out["metrics"]["active_scans"] = active
+            out["timestamps"]["finished_at"] = now_iso()
+            print(json.dumps(out, ensure_ascii=False))
+            return 0
+
+        recent_cutoff = datetime.now(timezone.utc) - timedelta(minutes=max(args.recent_window_minutes, 0))
+        recent = []
+        for scan in scans:
+            tid = scan.get("target_id") or (scan.get("target", {}) or {}).get("target_id")
+            if tid not in target_set:
+                continue
+            scan_time = parse_scan_time(scan)
+            if scan_time and scan_time >= recent_cutoff:
+                recent.append({"scan_id": scan.get("scan_id"), "target_id": tid, "scan_time": scan_time.isoformat()})
+
+        if recent:
+            out["ok"] = True
+            out["status"] = "skipped_recent"
+            out["warnings"].append("recent_scan_detected")
+            out["metrics"]["recent_scans_count"] = len(recent)
+            out["metrics"]["recent_scans"] = recent
             out["timestamps"]["finished_at"] = now_iso()
             print(json.dumps(out, ensure_ascii=False))
             return 0
