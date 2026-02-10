@@ -5,7 +5,6 @@ import argparse
 import json
 import os
 import sys
-import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
@@ -196,7 +195,7 @@ def main() -> int:
 
         if not urls:
             result["ok"] = True
-            result["status"] = "skipped"
+            result["status"] = "no_changes"
             result["warnings"].append("no_internet_accessible_targets")
             result["timestamps"]["finished_at"] = now_iso()
             print(json.dumps(result, ensure_ascii=False))
@@ -252,7 +251,7 @@ def main() -> int:
             result["status"] = "success"
             result["metrics"]["dry_run"] = True
         elif not to_add:
-            result["status"] = "skipped"
+            result["status"] = "no_changes"
             result["metrics"]["reason"] = "no_changes"
         else:
             add_result = acu_targets_add(acu_s, args.acu_base_url, args.acu_token, group_id, pt_name, to_add, args.timeout)
@@ -272,7 +271,7 @@ def main() -> int:
     except Exception as e:
         result["ok"] = False
         result["status"] = "error"
-        result["errors"].append({"code": "unexpected_error", "details": str(e), "traceback": traceback.format_exc()})
+        result["errors"].append({"code": "unexpected_error", "details": str(e)})
         result["timestamps"]["finished_at"] = now_iso()
         if args.output:
             with open(args.output, "w", encoding="utf-8") as f:
