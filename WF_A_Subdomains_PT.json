@@ -1,0 +1,350 @@
+{
+  "name": "WF_A_Subdomains_PT",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1200,
+        112
+      ],
+      "id": "96413fd4-3415-4449-aa55-669b63ed1fbe"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "product_type_id",
+              "value": "=6"
+            },
+            {
+              "name": "domain",
+              "value": "={{ $json.domain || '' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Set Parameters",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        -1008,
+        112
+      ],
+      "id": "08561f93-0a20-4956-a2e1-9f2b27a71f54"
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "url": "={{ ($env.DOJO_BASE_URL || 'http://localhost:8080/api/v2').replace(/\\/+$/,'') + '/product_types/' + $json.product_type_id + '/' }}",
+        "options": {}
+      },
+      "name": "Get Product Type from Dojo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        -800,
+        112
+      ],
+      "id": "00ccc811-2c6f-4a27-a2b4-34955a5a68d9",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mGl4PbJkKfeJbTg8",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Extract and normalize domain\nconst input = $node[\"Set Parameters\"].json;\nconst pt = $json;\n\nconst ptIdStr = input.product_type_id;\nconst ptId = Number(ptIdStr);\n\nif (!ptId || Number.isNaN(ptId)) {\n  throw new Error('product_type_id is missing or invalid: ' + ptIdStr);\n}\n\nlet domain = input.domain || '';\nif (!domain && pt && pt.name) {\n  domain = pt.name;\n}\n\nif (!domain) {\n  throw new Error('Could not determine domain for Product Type ' + ptId);\n}\n\n// normalize: strip scheme, path, port, lowercase\ndomain = domain.trim();\n// remove protocol\ndomain = domain.replace(/^https?:\\/\\//i, '');\n// cut path\ndomain = domain.split('/')[0];\n// cut port\ndomain = domain.split(':')[0];\n\ndomain = domain.toLowerCase();\n\nif (!domain) {\n  throw new Error('Domain normalization produced empty value for Product Type ' + ptId);\n}\n\nreturn [\n  {\n    json: {\n      product_type_id: ptId,\n      domain,\n      product_type: pt\n    }\n  }\n];"
+      },
+      "name": "Extract Domain",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        -608,
+        112
+      ],
+      "id": "7a05258d-d662-4fca-b658-94d5f1ce79b3"
+    },
+    {
+      "parameters": {
+        "command": "=python3 /opt/tools/enum_subs_auto.py \\\n  --domain \"{{ $json.domain }}\" \\\n  --resolve \\\n  --json-output"
+      },
+      "name": "Run Subdomain Enumeration",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        112
+      ],
+      "id": "a08c5604-cacd-4be3-9460-0f02a9f2899d"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.exitCode }}",
+              "operation": "equal"
+            }
+          ]
+        }
+      },
+      "name": "Check Script Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -208,
+        112
+      ],
+      "id": "86915ca7-6b2b-4940-a565-7aaaec449978"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Parse subdomain enumeration results\nlet result;\ntry {\n  result = JSON.parse($json.stdout || '{}');\n} catch (e) {\n  throw new Error('Failed to parse JSON from enum_subs_auto.py: ' + e.message);\n}\n\nlet subs = result.subs || [];\nif (!Array.isArray(subs)) {\n  throw new Error('Invalid subdomains format from script');\n}\n\nconst hosts = subs\n  .map(s => {\n    if (typeof s === 'string') return s;\n    if (s && typeof s === 'object' && s.host) return s.host;\n    return null;\n  })\n  .filter(s => s && typeof s === 'string');\n\nreturn [{\n  json: {\n    product_type_id: $node[\"Extract Domain\"].json.product_type_id,\n    domain: $node[\"Extract Domain\"].json.domain,\n    subdomains: hosts,\n    raw_result: result\n  }\n}];"
+      },
+      "name": "Parse Results",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "418e08e4-0e2d-44b7-b993-1bafabc98ec2"
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "url": "={{ ($env.DOJO_BASE_URL || 'http://localhost:8080/api/v2').replace(/\\/+$/,'') + '/products/?prod_type=' + $node[\"Extract Domain\"].json.product_type_id + '&limit=1000' }}",
+        "options": {}
+      },
+      "name": "Get Existing Products",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        208,
+        0
+      ],
+      "id": "a6360916-2e6e-4d0b-b385-a1dcc0154c97",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mGl4PbJkKfeJbTg8",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Decide which hosts need new Products\nconst parsed = $node[\"Parse Results\"].json;\nconst ptId = parsed.product_type_id;\nconst domain = parsed.domain;\nconst subs = parsed.subdomains || [];\n\nconst resp = $json || {};\nconst results = Array.isArray(resp.results) ? resp.results : [];\nconst existingNames = new Set(results.map(p => p.name));\n\nconst hostsToCreate = [];\n\nfor (const h of subs) {\n  if (!existingNames.has(h)) {\n    hostsToCreate.push(h);\n  }\n}\n\n// If no subdomains found at all, create root Product for domain if it doesn't exist\nif (subs.length === 0 && !existingNames.has(domain)) {\n  hostsToCreate.push(domain);\n}\n\nreturn hostsToCreate.map(host => ({\n  json: {\n    product_type_id: ptId,\n    domain,\n    host\n  }\n}));"
+      },
+      "name": "Prepare Create List",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        400,
+        0
+      ],
+      "id": "d7758be2-a147-46d3-b095-428d0648f08c"
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "={{ ($env.DOJO_BASE_URL || 'http://localhost:8080/api/v2').replace(/\\/+$/,'') + '/products/' }}",
+        "options": {
+          "bodyContentType": "json"
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "name",
+              "value": "={{ $json.host }}"
+            },
+            {
+              "name": "prod_type",
+              "value": "={{ $json.product_type_id }}"
+            },
+            {
+              "name": "description",
+              "value": "={{ 'Subdomain discovered for ' + $json[\"domain\"] + ' via automated enumeration' }}"
+            },
+            {
+              "name": "tags",
+              "value": "={{ ['needs:nmap'] }}"
+            }
+          ]
+        }
+      },
+      "name": "Create Product in Dojo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        608,
+        0
+      ],
+      "id": "1c6289f8-cc3d-4f95-b390-6af4b9a9754d",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mGl4PbJkKfeJbTg8",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Simple final summary based on parsed results\nconst parsed = $node[\"Parse Results\"].json;\nconst subs = parsed.subdomains || [];\n\nreturn [{\n  json: {\n    product_type_id: parsed.product_type_id,\n    domain: parsed.domain,\n    total_subdomains_found: subs.length,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "name": "Generate Final Report",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        400,
+        208
+      ],
+      "id": "c06f056f-3b53-4e4f-b7bc-b31b2e070d4f"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Handle script failure explicitly\nthrow new Error('Subdomain enumeration failed with exit code ' + $json.exitCode + ': ' + ($json.stderr || ''));"
+      },
+      "name": "Handle Script Error",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        0,
+        208
+      ],
+      "id": "c1357515-58a9-47b1-b598-3842a2aacd4e"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Parameters": {
+      "main": [
+        [
+          {
+            "node": "Get Product Type from Dojo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Product Type from Dojo": {
+      "main": [
+        [
+          {
+            "node": "Extract Domain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Domain": {
+      "main": [
+        [
+          {
+            "node": "Run Subdomain Enumeration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Subdomain Enumeration": {
+      "main": [
+        [
+          {
+            "node": "Check Script Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Script Success": {
+      "main": [
+        [
+          {
+            "node": "Parse Results",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Script Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Results": {
+      "main": [
+        [
+          {
+            "node": "Get Existing Products",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Generate Final Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Existing Products": {
+      "main": [
+        [
+          {
+            "node": "Prepare Create List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Create List": {
+      "main": [
+        [
+          {
+            "node": "Create Product in Dojo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "5c441b20-1a9b-4a96-92d2-aa0b62ab0e4b",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "d06b9c37a455942c350bdf64d5764dfb5548ea5097bfb316251734323f35ea3f"
+  },
+  "id": "oZT7uy2mMk9QWkNi",
+  "tags": []
+}

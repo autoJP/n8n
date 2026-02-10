@@ -1,0 +1,330 @@
+{
+  "name": "WF_B_Nmap_Product",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        272
+      ],
+      "id": "3e1ea827-ca6d-47c5-bde5-b953b7c71853"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "product_id",
+              "value": "=319"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Set Parameters",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        208,
+        272
+      ],
+      "id": "fa899c57-d9b2-42bc-b77e-2c93d64317d6"
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "url": "={{ ($env.DOJO_BASE_URL || 'http://localhost:8080/api/v2').replace(/\\/+$/,'') + '/products/' + $json.product_id + '/' }}",
+        "options": {}
+      },
+      "name": "Get Product from Dojo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        400,
+        272
+      ],
+      "id": "7eb273ef-1e11-4989-a0b2-db2124e73807",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mGl4PbJkKfeJbTg8",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=nmap -sV -T4 --top-ports 50 -oX /tmp/nmap_{{ $json.id }}.xml {{ $json.name }}"
+      },
+      "name": "Run nmap",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        576,
+        272
+      ],
+      "id": "1e022ac1-c945-47b6-8371-16283c341ffd",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.exitCode }}",
+              "operation": "equal"
+            }
+          ]
+        }
+      },
+      "name": "Check nmap Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        752,
+        272
+      ],
+      "id": "2cda6ed5-1b17-4e7c-8982-2224d9e78a47"
+    },
+    {
+      "parameters": {
+        "fileSelector": "=/tmp/nmap_{{ $('Get Product from Dojo').item.json.id }}.xml",
+        "options": {
+          "dataPropertyName": "file"
+        }
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        1024,
+        144
+      ],
+      "id": "498450e5-e41b-4f5c-b224-2fcaeb95868f",
+      "name": "Read/Write Files from Disk"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8080/api/v2/import-scan/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "scan_type",
+              "value": "Nmap Scan"
+            },
+            {
+              "name": "product",
+              "value": "={{ $('Get Product from Dojo').item.json.id }}"
+            },
+            {
+              "name": "active",
+              "value": "true"
+            },
+            {
+              "name": "verified",
+              "value": "true"
+            },
+            {
+              "name": "minimum_severity",
+              "value": "Info"
+            },
+            {
+              "name": "close_old_findings",
+              "value": "false"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "file"
+            },
+            {
+              "name": "product_name",
+              "value": "={{ $('Get Product from Dojo').item.json.name }}"
+            },
+            {
+              "name": "engagement_name",
+              "value": "={{ $now.format(\"dd-MM-yyyy\") }}"
+            },
+            {
+              "name": "auto_create_context",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1264,
+        144
+      ],
+      "id": "275e229f-cf66-423a-8296-e179e46a2a5b",
+      "name": "Import Scan to Dojo",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mGl4PbJkKfeJbTg8",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "PATCH",
+        "url": "={{ ($env.DOJO_BASE_URL || 'http://localhost:8080/api/v2').replace(/\\/+$/,'') + '/products/' + $('Get Product from Dojo').item.json.id+ '/' }}",
+        "options": {},
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "tags",
+              "value": "[\"needs:nmap\",\"nmap:failed\"]"
+            }
+          ]
+        }
+      },
+      "name": "Update Tags (Failure)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        1024,
+        416
+      ],
+      "id": "ec7132f5-1014-4f86-94e8-ad5f79251448",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "mGl4PbJkKfeJbTg8",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "executeOnce": false,
+        "command": "=DOJO_BASE_URL=\"http://localhost:8080/api/v2\" \\\nDOJO_TOKEN=\"8772f6e093f7a9e5eee8241b393131a5ae6e7260\" \\\npython3 /opt/tools/dojo_set_internet.py \\\n  --product-id {{$json[\"product_id\"]}} \\\n  --xml /tmp/nmap_{{$json[\"product_id\"]}}.xml\n"
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1504,
+        144
+      ],
+      "id": "9f23de74-3102-4e61-a464-349374c3d69f",
+      "name": "Update Tags (Success)"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Parameters": {
+      "main": [
+        [
+          {
+            "node": "Get Product from Dojo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Product from Dojo": {
+      "main": [
+        [
+          {
+            "node": "Run nmap",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run nmap": {
+      "main": [
+        [
+          {
+            "node": "Check nmap Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check nmap Success": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Tags (Failure)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Import Scan to Dojo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Import Scan to Dojo": {
+      "main": [
+        [
+          {
+            "node": "Update Tags (Success)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Tags (Failure)": {
+      "main": [
+        []
+      ]
+    },
+    "Update Tags (Success)": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "6041fa61-3cf9-4075-9d36-0e3596703339",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "d06b9c37a455942c350bdf64d5764dfb5548ea5097bfb316251734323f35ea3f"
+  },
+  "id": "OfDEDUueUQYP5GoV",
+  "tags": []
+}

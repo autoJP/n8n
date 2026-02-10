@@ -1,0 +1,166 @@
+{
+  "name": "WF_C_Targets_For_PT",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "8881a7ec-1878-4e10-94c8-6838f00aaacc"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "product_type_id",
+              "value": "=6"
+            },
+            {
+              "name": "acunetix_base_url",
+              "value": "https://192.168.68.101:3443"
+            },
+            {
+              "name": "acunetix_api_key",
+              "value": "1986ad8c0a5b3df4d7028d5f3c06e936ce0cbf064ad584e25a069a48d713da4ee"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Set Parameters",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [
+        208,
+        0
+      ],
+      "id": "b60803c9-c7f8-4192-a02d-c71c6095580b"
+    },
+    {
+      "parameters": {
+        "command": "=python3 /opt/tools/process_nmap_ips_for_pt.py \\\n  --product-type-id {{$json[\"product_type_id\"].toString()}} \\\n  --xml-dir /tmp \\\n  --api-token 8772f6e093f7a9e5eee8241b393131a5ae6e7260"
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        416,
+        0
+      ],
+      "id": "3762ce5b-c66a-4a26-9b9f-83c039540cca",
+      "name": "Execute Command"
+    },
+    {
+      "parameters": {
+        "command": "=python3 /opt/tools/acunetix_sync_pt.py \\\n  --dojo-base-url {{$env.DOJO_BASE_URL || 'http://localhost:8080/api/v2'}} \\\n  --dojo-api-token 8772f6e093f7a9e5eee8241b393131a5ae6e7260 \\\n  --product-type-id {{ $('Set Parameters').item.json.product_type_id }} \\\n  --acu-base-url {{ $('Set Parameters').item.json.acunetix_base_url }} \\\n  --acu-api-token {{ $('Set Parameters').item.json.acunetix_api_key }}\n "
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        624,
+        0
+      ],
+      "id": "2381b203-8544-4e50-a98f-0cfb818f3235",
+      "name": "Sync Acunetix Group"
+    },
+    {
+      "parameters": {
+        "command": "=python3 /opt/tools/acunetix_set_group_scan_speed.py \\\n  --acu-base-url {{ $('Set Parameters').item.json.acunetix_base_url }} \\\n  --acu-api-token {{ $('Set Parameters').item.json.acunetix_api_key }} \\\n  --group-id {{ $json.group_id }} \\\n  --scan-speed sequential\n"
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        0
+      ],
+      "id": "d7566881-9c82-4564-8538-2546bf40e85d",
+      "name": "Execute Command1"
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "import json\n\n# n8n подаёт данные в переменной `items`\nitem = items[0]  # берём первый элемент\nstdout = item.get(\"json\", {}).get(\"stdout\", \"\")\n\ntry:\n    parsed = json.loads(stdout)\nexcept Exception as e:\n    raise Exception(f\"Не удалось распарсить stdout как JSON:\\n{stdout}\\nОшибка: {e}\")\n\n# Формируем новый объект вывода\nreturn [{\n    \"json\": {\n        \"group_id\": parsed.get(\"group_id\"),\n        \"full_output\": parsed\n    }\n}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        0
+      ],
+      "id": "4c48ade9-718e-405b-89c1-1beab80ed6e0",
+      "name": "Code in Python (Beta)"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Parameters": {
+      "main": [
+        [
+          {
+            "node": "Execute Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Command": {
+      "main": [
+        [
+          {
+            "node": "Sync Acunetix Group",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sync Acunetix Group": {
+      "main": [
+        [
+          {
+            "node": "Code in Python (Beta)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in Python (Beta)": {
+      "main": [
+        [
+          {
+            "node": "Execute Command1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "f219f7ce-7867-484a-8806-8e183d70eba5",
+  "meta": {
+    "instanceId": "d06b9c37a455942c350bdf64d5764dfb5548ea5097bfb316251734323f35ea3f"
+  },
+  "id": "OsOBICmnEtSDo8Sm",
+  "tags": []
+}
