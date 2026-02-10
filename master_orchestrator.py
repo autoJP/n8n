@@ -2,55 +2,147 @@
 # -*- coding: utf-8 -*-
 
 import argparse
+import hashlib
 import json
 import os
-import subprocess
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
 STATE_PREFIX = "autojp_state:"
+STAGES = ["WF_A", "WF_B", "WF_C", "WF_D"]
+SUCCESS_STATUSES = {"success", "skipped", "no_changes", "already_running"}
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def run_cmd(cmd: List[str]) -> Dict[str, Any]:
-    cp = subprocess.run(cmd, text=True, capture_output=True)
-    body = {}
-    try:
-        body = json.loads(cp.stdout.strip() or "{}")
-    except Exception:
-        body = {"ok": False, "status": "error", "errors": [{"code": "invalid_json", "details": cp.stdout}]}
-    return {"exit_code": cp.returncode, "stdout": cp.stdout, "stderr": cp.stderr, "body": body}
+def default_result() -> Dict[str, Any]:
+    ts = now_iso()
+    return {
+        "ok": False,
+        "stage": "WF_MASTER",
+        "product_type_id": None,
+        "product_id": None,
+        "status": "error",
+        "metrics": {},
+        "errors": [{"code": "invalid_workflow_response"}],
+        "warnings": [],
+        "timestamps": {"started_at": ts, "finished_at": ts},
+    }
 
 
-def get_state(pt: Dict[str, Any]) -> Dict[str, Any]:
-    desc = pt.get("description") or ""
-    for line in desc.splitlines():
+def read_state_from_description(description: str) -> Dict[str, Any]:
+    for line in (description or "").splitlines():
         if line.startswith(STATE_PREFIX):
-            raw = line[len(STATE_PREFIX) :].strip()
             try:
-                return json.loads(raw)
+                return json.loads(line[len(STATE_PREFIX) :].strip())
             except Exception:
                 return {}
     return {}
 
 
-def set_state(base_url: str, token: str, pt_id: int, state: Dict[str, Any], timeout: int) -> None:
-    h = {"Authorization": f"Token {token}", "Content-Type": "application/json", "Accept": "application/json"}
-    r = requests.get(f"{base_url.rstrip('/')}/product_types/{pt_id}/", headers=h, timeout=timeout)
-    r.raise_for_status()
-    pt = r.json()
-    desc = pt.get("description") or ""
-    lines = [l for l in desc.splitlines() if not l.startswith(STATE_PREFIX)]
+def write_state_to_description(description: str, state: Dict[str, Any]) -> str:
+    lines = [line for line in (description or "").splitlines() if not line.startswith(STATE_PREFIX)]
     lines.append(f"{STATE_PREFIX}{json.dumps(state, ensure_ascii=False, separators=(',', ':'))}")
-    patch = {"description": "\n".join(lines).strip()}
-    p = requests.patch(f"{base_url.rstrip('/')}/product_types/{pt_id}/", headers=h, json=patch, timeout=timeout)
+    return "\n".join(lines).strip()
+
+
+def dojo_headers(token: str) -> Dict[str, str]:
+    return {
+        "Authorization": f"Token {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+
+def get_product_type(base_url: str, token: str, pt_id: int, timeout: int) -> Dict[str, Any]:
+    r = requests.get(f"{base_url.rstrip('/')}/product_types/{pt_id}/", headers=dojo_headers(token), timeout=timeout)
+    r.raise_for_status()
+    return r.json()
+
+
+def patch_product_type_state(base_url: str, token: str, pt_id: int, state: Dict[str, Any], timeout: int) -> None:
+    pt = get_product_type(base_url, token, pt_id, timeout)
+    payload = {"description": write_state_to_description(pt.get("description") or "", state)}
+    p = requests.patch(
+        f"{base_url.rstrip('/')}/product_types/{pt_id}/",
+        headers=dojo_headers(token),
+        json=payload,
+        timeout=timeout,
+    )
     p.raise_for_status()
+
+
+def normalize_workflow_result(raw: Any, fallback_stage: str, pt_id: int) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        candidate = raw
+        if isinstance(raw.get("data"), list) and raw.get("data"):
+            first = raw["data"][0]
+            if isinstance(first, dict) and isinstance(first.get("json"), dict):
+                candidate = first["json"]
+        if isinstance(raw.get("json"), dict):
+            candidate = raw["json"]
+        if isinstance(candidate, dict) and "ok" in candidate and "status" in candidate:
+            candidate.setdefault("stage", fallback_stage)
+            candidate.setdefault("product_type_id", pt_id)
+            candidate.setdefault("metrics", {})
+            candidate.setdefault("errors", [])
+            candidate.setdefault("warnings", [])
+            candidate.setdefault("timestamps", {"started_at": now_iso(), "finished_at": now_iso()})
+            candidate.setdefault("product_id", None)
+            return candidate
+    out = default_result()
+    out["stage"] = fallback_stage
+    out["product_type_id"] = pt_id
+    return out
+
+
+def build_n8n_headers(api_key: str) -> Dict[str, str]:
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if api_key:
+        headers["X-N8N-API-KEY"] = api_key
+    return headers
+
+
+def execute_workflow(
+    n8n_base_url: str,
+    n8n_api_key: str,
+    workflow_id: str,
+    payload: Dict[str, Any],
+    timeout: int,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    # n8n API: POST /api/v1/workflows/{id}/execute
+    url = f"{n8n_base_url.rstrip('/')}/api/v1/workflows/{workflow_id}/execute"
+    req = {"workflowData": None, "input": [payload], "waitTillCompletion": True}
+    r = requests.post(url, headers=build_n8n_headers(n8n_api_key), json=req, timeout=timeout)
+    r.raise_for_status()
+    body = r.json()
+    normalized = normalize_workflow_result(body, payload.get("stage") or "WF_UNKNOWN", int(payload["product_type_id"]))
+    return normalized, body
+
+
+def next_stage(state: Dict[str, Any]) -> Optional[str]:
+    current = state.get("current_stage")
+    if not current:
+        return STAGES[0]
+    if current not in STAGES:
+        return STAGES[0]
+    idx = STAGES.index(current)
+    if idx >= len(STAGES) - 1:
+        return None
+    return STAGES[idx + 1]
+
+
+def input_hash_for_pt(pt: Dict[str, Any]) -> str:
+    marker = {
+        "name": pt.get("name"),
+        "updated": pt.get("updated") or pt.get("updated_at") or "",
+    }
+    return hashlib.sha256(json.dumps(marker, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 def main() -> int:
@@ -58,77 +150,126 @@ def main() -> int:
     ap.add_argument("--base-url", default=os.environ.get("DOJO_BASE_URL"))
     ap.add_argument("--token", default=os.environ.get("DOJO_API_TOKEN"))
     ap.add_argument("--product-type-ids", required=True, help="Comma-separated PT IDs")
-    ap.add_argument("--timeout", type=int, default=30)
+    ap.add_argument("--n8n-base-url", default=os.environ.get("N8N_BASE_URL", "http://localhost:5678"))
+    ap.add_argument("--n8n-api-key", default=os.environ.get("N8N_API_KEY", ""))
+    ap.add_argument("--wf-a-id", default=os.environ.get("N8N_WF_A_ID"))
+    ap.add_argument("--wf-b-id", default=os.environ.get("N8N_WF_B_ID"))
+    ap.add_argument("--wf-c-id", default=os.environ.get("N8N_WF_C_ID"))
+    ap.add_argument("--wf-d-id", default=os.environ.get("N8N_WF_D_ID"))
+    ap.add_argument("--timeout", type=int, default=60)
     args = ap.parse_args()
 
+    stage_to_id = {
+        "WF_A": args.wf_a_id,
+        "WF_B": args.wf_b_id,
+        "WF_C": args.wf_c_id,
+        "WF_D": args.wf_d_id,
+    }
+
+    started = now_iso()
     result = {
         "ok": True,
         "stage": "WF_MASTER",
         "product_type_id": None,
+        "product_id": None,
         "status": "success",
-        "metrics": {"processed": 0},
+        "metrics": {"processed": 0, "failed": 0},
         "errors": [],
         "warnings": [],
-        "timestamps": {"started_at": now_iso(), "finished_at": now_iso()},
+        "timestamps": {"started_at": started, "finished_at": started},
         "items": [],
     }
 
+    missing_wf_ids = [k for k, v in stage_to_id.items() if not v]
+    if missing_wf_ids:
+        err = {"code": "missing_workflow_ids", "details": missing_wf_ids}
+        result["ok"] = False
+        result["status"] = "error"
+        result["errors"].append(err)
+        result["timestamps"]["finished_at"] = now_iso()
+        print(json.dumps(result, ensure_ascii=False))
+        return 1
+
     ids = [int(x.strip()) for x in args.product_type_ids.split(",") if x.strip()]
-    h = {"Authorization": f"Token {args.token}", "Content-Type": "application/json", "Accept": "application/json"}
 
     for pt_id in ids:
         item: Dict[str, Any] = {"product_type_id": pt_id, "status": "skipped", "steps": []}
         try:
-            pt = requests.get(f"{args.base_url.rstrip('/')}/product_types/{pt_id}/", headers=h, timeout=args.timeout).json()
-            state = get_state(pt)
-            retry = int(state.get("retry_count", 0))
-            failed_step = state.get("failed_step")
+            pt = get_product_type(args.base_url, args.token, pt_id, args.timeout)
+            state = read_state_from_description(pt.get("description") or "")
+            state.setdefault("current_stage", None)
+            state.setdefault("last_success_stage", None)
+            state.setdefault("last_run_at", None)
+            state.setdefault("last_error", None)
+            state.setdefault("retry_count", 0)
+            state["input_hash"] = input_hash_for_pt(pt)
 
-            if retry >= 3 and failed_step:
-                item["status"] = "skipped"
-                item["steps"].append({"stage": failed_step, "status": "retry_limit_reached"})
-                result["warnings"].append(f"pt_{pt_id}_retry_limit_reached")
-                result["items"].append(item)
-                continue
-
-            pipeline = [
-                ("WF_A", ["python3", "enum_subs_auto.py", "--domain", pt.get("name", "")]),
-                ("WF_C", ["python3", "acunetix_sync_pt.py", "--product-type-id", str(pt_id)]),
-                ("WF_D", ["python3", "acunetix_scan_pt.py", "--product-type-id", str(pt_id)]),
-            ]
-
-            started = False
-            for stage, cmd in pipeline:
-                if not started and state.get(stage) == "success":
-                    continue
-                started = True
-                step = run_cmd(cmd)
-                body = step["body"]
-                status = body.get("status", "error")
-                item["steps"].append({"stage": stage, "status": status})
-                state[stage] = "success" if body.get("ok") else "error"
-                state["last_run"] = now_iso()
-                state["last_error"] = body.get("errors", [])
-                if body.get("ok") and status in {"success", "skipped", "already_running"}:
-                    state["retry_count"] = 0
-                    state.pop("failed_step", None)
-                else:
-                    state["retry_count"] = retry + 1
-                    state["failed_step"] = stage
-                    set_state(args.base_url, args.token, pt_id, state, args.timeout)
+            # Run until pipeline completes or an error occurs.
+            while True:
+                stage = state.get("current_stage")
+                if not stage:
+                    stage = STAGES[0]
+                wf_id = stage_to_id.get(stage)
+                if not wf_id:
                     item["status"] = "error"
+                    item["steps"].append({"stage": stage, "status": "error", "error": "workflow_id_not_set"})
+                    state["last_error"] = {"code": "workflow_id_not_set", "stage": stage}
                     break
-                set_state(args.base_url, args.token, pt_id, state, args.timeout)
-            else:
-                item["status"] = "success"
+
+                payload = {
+                    "product_type_id": pt_id,
+                    "run_id": f"pt-{pt_id}-{int(datetime.now(timezone.utc).timestamp())}",
+                    "trace_id": f"master-{pt_id}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+                    "stage": stage,
+                }
+                step_result, raw = execute_workflow(
+                    args.n8n_base_url,
+                    args.n8n_api_key,
+                    wf_id,
+                    payload,
+                    args.timeout,
+                )
+
+                step_status = step_result.get("status", "error")
+                step_ok = bool(step_result.get("ok")) and step_status in SUCCESS_STATUSES
+                item["steps"].append({"stage": stage, "status": step_status, "raw": raw})
+                state["last_run_at"] = now_iso()
+
+                if step_ok:
+                    state["last_success_stage"] = stage
+                    state["last_error"] = None
+                    state["retry_count"] = 0
+                    nxt = next_stage({"current_stage": stage})
+                    if nxt is None:
+                        item["status"] = "success"
+                        state["current_stage"] = None
+                        break
+                    state["current_stage"] = nxt
+                    patch_product_type_state(args.base_url, args.token, pt_id, state, args.timeout)
+                    continue
+
+                state["last_error"] = {
+                    "stage": stage,
+                    "status": step_status,
+                    "errors": step_result.get("errors", []),
+                }
+                state["retry_count"] = int(state.get("retry_count", 0)) + 1
+                state["current_stage"] = stage
+                item["status"] = "error"
+                break
+
+            patch_product_type_state(args.base_url, args.token, pt_id, state, args.timeout)
         except Exception as exc:
             item["status"] = "error"
             item["steps"].append({"stage": "WF_MASTER", "status": "error", "details": str(exc)})
-            result["ok"] = False
 
+        if item["status"] == "error":
+            result["ok"] = False
+            result["metrics"]["failed"] += 1
         result["items"].append(item)
 
     result["metrics"]["processed"] = len(result["items"])
+    result["status"] = "success" if result["ok"] else "error"
     result["timestamps"]["finished_at"] = now_iso()
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result["ok"] else 1

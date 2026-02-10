@@ -2,13 +2,16 @@
   "name": "WF_Master_Orchestrator",
   "nodes": [
     {"parameters": {}, "name": "Trigger", "type": "n8n-nodes-base.executeWorkflowTrigger", "typeVersion": 1, "position": [0, 0], "id": "wf-m-trigger"},
-    {"parameters": {"values": {"string": [{"name": "product_type_ids", "value": "={{ $json.product_type_ids || '' }}"}]}}, "name": "Set PT List", "type": "n8n-nodes-base.set", "typeVersion": 1, "position": [220, 0], "id": "wf-m-set"},
-    {"parameters": {"command": "=python3 /opt/tools/master_orchestrator.py --base-url {{$env.DOJO_BASE_URL}} --token {{$env.DOJO_API_TOKEN}} --product-type-ids \"{{ $json.product_type_ids }}\""}, "name": "Run State Machine", "type": "n8n-nodes-base.executeCommand", "typeVersion": 1, "position": [440, 0], "id": "wf-m-run"},
-    {"parameters": {"functionCode": "return [{json: JSON.parse($json.stdout || '{}')}];"}, "name": "Parse Result", "type": "n8n-nodes-base.function", "typeVersion": 1, "position": [660, 0], "id": "wf-m-parse"}
+    {"parameters": {"values": {"string": [{"name": "product_type_ids", "value": "={{ $json.product_type_ids || '' }}"}, {"name": "run_id", "value": "={{ $json.run_id || '' }}"}, {"name": "trace_id", "value": "={{ $json.trace_id || '' }}"}]}}, "name": "Set Input", "type": "n8n-nodes-base.set", "typeVersion": 1, "position": [220, 0], "id": "wf-m-set"},
+    {"parameters": {"conditions": {"string": [{"value1": "={{ $json.product_type_ids }}", "operation": "isNotEmpty"}]}}, "name": "Validate Input", "type": "n8n-nodes-base.if", "typeVersion": 1, "position": [420, 0], "id": "wf-m-validate"},
+    {"parameters": {"command": "=python3 /opt/tools/master_orchestrator.py --base-url {{$env.DOJO_BASE_URL}} --token {{$env.DOJO_API_TOKEN}} --n8n-base-url {{$env.N8N_BASE_URL}} --n8n-api-key {{$env.N8N_API_KEY}} --wf-a-id {{$env.N8N_WF_A_ID}} --wf-b-id {{$env.N8N_WF_B_ID}} --wf-c-id {{$env.N8N_WF_C_ID}} --wf-d-id {{$env.N8N_WF_D_ID}} --product-type-ids \"{{ $json.product_type_ids }}\""}, "name": "Run State Machine", "type": "n8n-nodes-base.executeCommand", "typeVersion": 1, "position": [640, -80], "id": "wf-m-run"},
+    {"parameters": {"functionCode": "let body={}; try{body=JSON.parse($json.stdout||'{}')}catch(e){body={ok:false,stage:'WF_MASTER',status:'error',metrics:{},errors:[{code:'invalid_json',details:$json.stdout||''}],warnings:[],timestamps:{started_at:$now.toISO(),finished_at:$now.toISO()}}}; return [{json: body}];"}, "name": "Parse Result", "type": "n8n-nodes-base.function", "typeVersion": 1, "position": [860, -80], "id": "wf-m-parse"},
+    {"parameters": {"functionCode": "return [{json:{ok:false,stage:'WF_MASTER',product_type_id:null,product_id:null,status:'error',metrics:{},errors:[{code:'missing_product_type_ids'}],warnings:[],timestamps:{started_at:$now.toISO(),finished_at:$now.toISO()},run_id:$node['Set Input'].json.run_id||'',trace_id:$node['Set Input'].json.trace_id||''}}];"}, "name": "Validation Error", "type": "n8n-nodes-base.function", "typeVersion": 1, "position": [640, 120], "id": "wf-m-validation-error"}
   ],
   "connections": {
-    "Trigger": {"main": [[{"node": "Set PT List", "type": "main", "index": 0}]]},
-    "Set PT List": {"main": [[{"node": "Run State Machine", "type": "main", "index": 0}]]},
+    "Trigger": {"main": [[{"node": "Set Input", "type": "main", "index": 0}]]},
+    "Set Input": {"main": [[{"node": "Validate Input", "type": "main", "index": 0}]]},
+    "Validate Input": {"main": [[{"node": "Run State Machine", "type": "main", "index": 0}], [{"node": "Validation Error", "type": "main", "index": 0}]]},
     "Run State Machine": {"main": [[{"node": "Parse Result", "type": "main", "index": 0}]]}
   },
   "active": false,
