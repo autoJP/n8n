@@ -2,14 +2,17 @@
   "name": "WF_D_Scan_For_PT",
   "nodes": [
     {"parameters": {}, "name": "Trigger", "type": "n8n-nodes-base.executeWorkflowTrigger", "typeVersion": 1, "position": [0, 0], "id": "wf-d-trigger"},
-    {"parameters": {"values": {"string": [{"name": "product_type_id", "value": "={{ $json.product_type_id || '' }}"}]}}, "name": "Set Input", "type": "n8n-nodes-base.set", "typeVersion": 1, "position": [220, 0], "id": "wf-d-set"},
-    {"parameters": {"command": "=python3 /opt/tools/acunetix_scan_pt.py --base-url {{$env.DOJO_BASE_URL}} --token {{$env.DOJO_API_TOKEN}} --product-type-id {{ $json.product_type_id }} --acu-base-url {{$env.ACUNETIX_BASE_URL}} --acu-token {{$env.ACUNETIX_API_TOKEN}} --scan-profile-id {{$env.ACUNETIX_SCAN_PROFILE_ID}}"}, "name": "Scan Guard + Start", "type": "n8n-nodes-base.executeCommand", "typeVersion": 1, "position": [440, 0], "id": "wf-d-run"},
-    {"parameters": {"functionCode": "return [{json: JSON.parse($json.stdout || '{}')}];"}, "name": "Parse Result", "type": "n8n-nodes-base.function", "typeVersion": 1, "position": [660, 0], "id": "wf-d-parse"}
+    {"parameters": {"values": {"string": [{"name": "product_type_id", "value": "={{ $json.product_type_id || '' }}"}, {"name": "product_id", "value": "={{ $json.product_id || '' }}"}, {"name": "run_id", "value": "={{ $json.run_id || '' }}"}, {"name": "trace_id", "value": "={{ $json.trace_id || '' }}"}]}}, "name": "Set Input", "type": "n8n-nodes-base.set", "typeVersion": 1, "position": [220, 0], "id": "wf-d-set"},
+    {"parameters": {"conditions": {"string": [{"value1": "={{ $json.product_type_id }}", "operation": "isNotEmpty"}]}}, "name": "Validate PT", "type": "n8n-nodes-base.if", "typeVersion": 1, "position": [440, 0], "id": "wf-d-validate"},
+    {"parameters": {"command": "=python3 /opt/tools/acunetix_scan_pt.py --base-url {{$env.DOJO_BASE_URL}} --token {{$env.DOJO_API_TOKEN}} --product-type-id {{ $json.product_type_id }} --acu-base-url {{$env.ACUNETIX_BASE_URL}} --acu-token {{$env.ACUNETIX_API_TOKEN}} --scan-profile-id {{$env.ACUNETIX_SCAN_PROFILE_ID}}"}, "name": "Scan Guard + Start", "type": "n8n-nodes-base.executeCommand", "typeVersion": 1, "position": [660, -80], "id": "wf-d-run"},
+    {"parameters": {"functionCode": "let body={}; try{body=JSON.parse($json.stdout||'{}')}catch(e){body={ok:false,status:'error',errors:[{code:'invalid_json',details:$json.stdout||''}]}}; return [{json:{ok:!!body.ok,stage:'WF_D',product_type_id:$node['Set Input'].json.product_type_id,product_id:$node['Set Input'].json.product_id||null,status:body.status||'error',metrics:body.metrics||{},errors:body.errors||[],warnings:body.warnings||[],timestamps:body.timestamps||{started_at:$now.toISO(),finished_at:$now.toISO()},run_id:$node['Set Input'].json.run_id||'',trace_id:$node['Set Input'].json.trace_id||''}}];"}, "name": "Normalize Result", "type": "n8n-nodes-base.function", "typeVersion": 1, "position": [880, -80], "id": "wf-d-parse"},
+    {"parameters": {"functionCode": "return [{json:{ok:false,stage:'WF_D',product_type_id:$node['Set Input'].json.product_type_id||null,product_id:$node['Set Input'].json.product_id||null,status:'error',metrics:{},errors:[{code:'missing_product_type_id'}],warnings:[],timestamps:{started_at:$now.toISO(),finished_at:$now.toISO()},run_id:$node['Set Input'].json.run_id||'',trace_id:$node['Set Input'].json.trace_id||''}}];"}, "name": "Validation Error", "type": "n8n-nodes-base.function", "typeVersion": 1, "position": [660, 120], "id": "wf-d-validation-error"}
   ],
   "connections": {
     "Trigger": {"main": [[{"node": "Set Input", "type": "main", "index": 0}]]},
-    "Set Input": {"main": [[{"node": "Scan Guard + Start", "type": "main", "index": 0}]]},
-    "Scan Guard + Start": {"main": [[{"node": "Parse Result", "type": "main", "index": 0}]]}
+    "Set Input": {"main": [[{"node": "Validate PT", "type": "main", "index": 0}]]},
+    "Validate PT": {"main": [[{"node": "Scan Guard + Start", "type": "main", "index": 0}], [{"node": "Validation Error", "type": "main", "index": 0}]]},
+    "Scan Guard + Start": {"main": [[{"node": "Normalize Result", "type": "main", "index": 0}]]}
   },
   "active": false,
   "settings": {"executionOrder": "v1"},

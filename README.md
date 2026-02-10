@@ -1,19 +1,76 @@
 # autoJP/n8n
 
-Набор n8n workflow + Python CLI для пайплайна PT: `WF_A -> WF_B -> WF_C -> WF_D`,
-с healthcheck (`WF_E`) и мастер-оркестратором (`WF_Master_Orchestrator`).
+Единый режим работы: **Master -> n8n workflows -> скрипты**, без прямых вызовов скриптов из Master.
 
-## Что исправлено
-- Убраны захардкоженные секреты/URL/IP из workflow exports: только `$env.*` и credentials.
-- Убран хардкод `product_type_id`: PT передаётся только через вход workflow.
-- Приведены переменные к единому стандарту: `DOJO_*`, `ACUNETIX_*`.
-- `WF_E` проверяет Dojo только с авторизацией (401/403 отдельно от network timeout).
-- Добавлена идемпотентность:
-  - `WF_C` (`acunetix_sync_pt.py`) делает upsert и возвращает `skipped/no_changes`.
-  - `WF_D` (`acunetix_scan_pt.py`) не запускает новый скан, если уже есть активный.
-- Master переведён в watcher/state-machine (`master_orchestrator.py` + `WF_Master_Orchestrator`).
+## Архитектура (single source of truth)
+
+Пайплайн для каждого Product Type всегда выполняется как:
+
+`WF_A -> WF_B -> WF_C -> WF_D`
+
+- `WF_Master_Orchestrator` запускает `master_orchestrator.py`.
+- `master_orchestrator.py` вызывает **только n8n workflow execution API** для `WF_A/WF_B/WF_C/WF_D`.
+- Каждый `WF_*` уже внутри себя может вызвать Python-скрипт (`executeCommand`), но это деталь реализации workflow, не Master.
+
+## Входы workflow (стандартизировано)
+
+Для `WF_A/WF_B/WF_C/WF_D` вход единообразный:
+- `product_type_id` (обязательный)
+- `product_id` (опциональный)
+- `run_id` (опциональный)
+- `trace_id` (опциональный)
+
+Для `WF_Master_Orchestrator`:
+- `product_type_ids` (обязательный, CSV)
+- `run_id` (опциональный)
+- `trace_id` (опциональный)
+
+При отсутствии обязательного поля workflow возвращает контролируемый `invalid input`-результат, а не падает в середине.
+
+## Единый контракт результата
+
+Все workflow и вызываемые из них скрипты возвращают/нормализуют контракт:
+- `ok` (boolean)
+- `stage`
+- `product_type_id`
+- `product_id`
+- `status` (`success|skipped|already_running|no_changes|error|timeout`)
+- `metrics` (object)
+- `errors` (array)
+- `warnings` (array)
+- `timestamps` (`started_at`, `finished_at`)
+
+Master принимает решения **только** по этому контракту.
+
+## State machine в DefectDojo
+
+State хранится в `description` Product Type строкой:
+
+`autojp_state:{...json...}`
+
+Используемые ключи:
+- `current_stage`
+- `last_success_stage`
+- `last_run_at`
+- `last_error`
+- `retry_count`
+- `input_hash`
+
+Алгоритм Master на каждый PT:
+1. Читает state из Dojo.
+2. Выбирает допустимый следующий stage.
+3. Запускает только этот stage (через n8n workflow).
+4. Обновляет state в Dojo по контракту результата.
+5. Ошибка одного PT не останавливает обработку остальных PT.
+
+## Идемпотентность
+
+- **WF_C** (`acunetix_sync_pt.py`): upsert targets; при отсутствии изменений возвращает `status=no_changes` или `skipped`.
+- **WF_D** (`acunetix_scan_pt.py`): scan-guard; если есть активный scan, возвращает `already_running`/`skipped` без запуска нового.
+- Повторный запуск Master на неизменных данных не должен создавать новые targets и не должен запускать новый scan.
 
 ## Workflows
+
 - `WF_A_Subdomains_PT.json`
 - `WF_B_Nmap_Product.json`
 - `WF_C_Targets_For_PT.json`
@@ -21,51 +78,29 @@
 - `WF_E_HealthCheck.json`
 - `WF_Master_Orchestrator.json`
 
-## Обязательные env/credentials
+## Обязательные env
+
 См. `.env.example`.
 
-Обязательно:
+Dojo/Acunetix:
 - `DOJO_BASE_URL`
 - `DOJO_API_TOKEN`
 - `ACUNETIX_BASE_URL`
 - `ACUNETIX_API_TOKEN`
 - `ACUNETIX_SCAN_PROFILE_ID`
+- `NMAP_XML_DIR`
 
-## Единый контракт результата
-Все ключевые шаги возвращают:
-- `ok`
-- `stage`
-- `product_type_id`
-- `status` (`success|skipped|error|already_running|timeout`)
-- `metrics`
-- `errors[]`
-- `warnings[]`
-- `timestamps`
+N8N execution API:
+- `N8N_BASE_URL`
+- `N8N_API_KEY`
+- `N8N_WF_A_ID`
+- `N8N_WF_B_ID`
+- `N8N_WF_C_ID`
+- `N8N_WF_D_ID`
 
-## Где хранится state
-State хранится в `description` соответствующего `Product Type` в DefectDojo, строкой:
+## Healthcheck
 
-`autojp_state:{...json...}`
+`WF_E_HealthCheck` делает авторизованный Dojo-check и различает:
+- auth ошибки (`401/403`) -> `dojo_auth_failed`
+- network/connectivity проблемы -> `dojo_unreachable`
 
-Ключи state:
-- `WF_A`, `WF_C`, `WF_D` — результат последнего шага (`success|error`)
-- `last_run`
-- `last_error`
-- `retry_count`
-- `failed_step`
-
-## Проверка идемпотентности
-1. Запустить `WF_C` дважды для одного PT с неизменными данными.
-   - Второй запуск: `status=skipped`, причина `no_changes`.
-2. Запустить `WF_D` дважды для одного PT.
-   - Если первый скан активен: второй запуск `status=already_running`.
-3. Запустить `WF_Master_Orchestrator` дважды.
-   - Второй запуск не должен повторно выполнять уже успешные шаги без изменения состояния.
-
-## Версионные зависимости
-- Endpoints Acunetix (`/api/v1/targets/add`, `/api/v1/scans`, `/api/v1/target_groups/...`) зависят от версии Acunetix.
-- Формат полей Product Type в Dojo зависит от версии Dojo API v2.
-- При несовместимости меняйте только URL/fields в:
-  - `acunetix_sync_pt.py`
-  - `acunetix_scan_pt.py`
-  - `master_orchestrator.py`

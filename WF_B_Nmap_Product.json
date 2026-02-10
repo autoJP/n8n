@@ -2,17 +2,17 @@
   "name": "WF_B_Nmap_Product",
   "nodes": [
     {"parameters": {}, "name": "Trigger", "type": "n8n-nodes-base.executeWorkflowTrigger", "typeVersion": 1, "position": [0, 0], "id": "wf-b-trigger"},
-    {"parameters": {"values": {"string": [{"name": "product_type_id", "value": "={{ $json.product_type_id || '' }}"}]}}, "name": "Set Input", "type": "n8n-nodes-base.set", "typeVersion": 1, "position": [220, 0], "id": "wf-b-set-input"},
+    {"parameters": {"values": {"string": [{"name": "product_type_id", "value": "={{ $json.product_type_id || '' }}"}, {"name": "product_id", "value": "={{ $json.product_id || '' }}"}, {"name": "run_id", "value": "={{ $json.run_id || '' }}"}, {"name": "trace_id", "value": "={{ $json.trace_id || '' }}"}]}}, "name": "Set Input", "type": "n8n-nodes-base.set", "typeVersion": 1, "position": [220, 0], "id": "wf-b-set-input"},
     {"parameters": {"conditions": {"string": [{"value1": "={{ $json.product_type_id }}", "operation": "isNotEmpty"}]}}, "name": "Validate PT", "type": "n8n-nodes-base.if", "typeVersion": 1, "position": [430, 0], "id": "wf-b-validate"},
     {"parameters": {"command": "=python3 /opt/tools/process_nmap_ips_for_pt.py --base-url {{$env.DOJO_BASE_URL}} --token {{$env.DOJO_API_TOKEN}} --product-type-id {{ $json.product_type_id }} --input {{$env.NMAP_XML_DIR || '/tmp'}}"}, "name": "Process Nmap", "type": "n8n-nodes-base.executeCommand", "typeVersion": 1, "position": [650, -80], "id": "wf-b-process"},
-    {"parameters": {"functionCode": "return [{ json: JSON.parse($json.stdout || '{}') }];"}, "name": "Parse Result", "type": "n8n-nodes-base.function", "typeVersion": 1, "position": [870, -80], "id": "wf-b-parse"},
-    {"parameters": {"functionCode": "return [{json:{ok:false,stage:'WF_B',product_type_id:$node['Set Input'].json.product_type_id,status:'error',metrics:{},errors:[{code:'missing_product_type_id'}],warnings:[],timestamps:{started_at:$now.toISO(),finished_at:$now.toISO()}}}];"}, "name": "Validation Error", "type": "n8n-nodes-base.function", "typeVersion": 1, "position": [650, 120], "id": "wf-b-validation-error"}
+    {"parameters": {"functionCode": "let body={}; try{body=JSON.parse($json.stdout||'{}')}catch(e){body={ok:false,status:'error',errors:[{code:'invalid_json',details:$json.stdout||''}]}}; return [{json:{ok:!!body.ok,stage:'WF_B',product_type_id:$node['Set Input'].json.product_type_id,product_id:$node['Set Input'].json.product_id||null,status:body.status||'error',metrics:body.metrics||{},errors:body.errors||[],warnings:body.warnings||[],timestamps:body.timestamps||{started_at:$now.toISO(),finished_at:$now.toISO()},run_id:$node['Set Input'].json.run_id||'',trace_id:$node['Set Input'].json.trace_id||''}}];"}, "name": "Normalize Result", "type": "n8n-nodes-base.function", "typeVersion": 1, "position": [870, -80], "id": "wf-b-parse"},
+    {"parameters": {"functionCode": "return [{json:{ok:false,stage:'WF_B',product_type_id:$node['Set Input'].json.product_type_id||null,product_id:$node['Set Input'].json.product_id||null,status:'error',metrics:{},errors:[{code:'missing_product_type_id'}],warnings:[],timestamps:{started_at:$now.toISO(),finished_at:$now.toISO()},run_id:$node['Set Input'].json.run_id||'',trace_id:$node['Set Input'].json.trace_id||''}}];"}, "name": "Validation Error", "type": "n8n-nodes-base.function", "typeVersion": 1, "position": [650, 120], "id": "wf-b-validation-error"}
   ],
   "connections": {
     "Trigger": {"main": [[{"node": "Set Input", "type": "main", "index": 0}]]},
     "Set Input": {"main": [[{"node": "Validate PT", "type": "main", "index": 0}]]},
     "Validate PT": {"main": [[{"node": "Process Nmap", "type": "main", "index": 0}], [{"node": "Validation Error", "type": "main", "index": 0}]]},
-    "Process Nmap": {"main": [[{"node": "Parse Result", "type": "main", "index": 0}]]}
+    "Process Nmap": {"main": [[{"node": "Normalize Result", "type": "main", "index": 0}]]}
   },
   "active": false,
   "settings": {"executionOrder": "v1"},
